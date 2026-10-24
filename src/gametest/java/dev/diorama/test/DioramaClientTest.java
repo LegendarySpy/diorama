@@ -1924,11 +1924,11 @@ public class DioramaClientTest implements FabricClientGameTest {
 		world.getServer().runCommand("summon ocelot " + (x + 4) + " " + y + " " + (z + 4) + " {NoAI:1b,PersistenceRequired:1b,Silent:1b,Age:-24000}");
 		//?}
 		context.waitTicks(20);
-		assertFace(context, EntityTypes.OCELOT, false, "the ocelot's face from the test mod's assets", "minecraft:textures/entity/cat/ocelot.png 5,5 5x4 + 2,26 3x2 at 1,2");
+		assertFace(context, EntityTypes.OCELOT, false, "the ocelot's face from the test mod's assets", "minecraft:textures/entity/cat/ocelot.png 64x32: 5,5 5x4 + 2,26 3x2 at 1,2");
 		//? if >=26.1 {
-		assertFace(context, EntityTypes.OCELOT, true, "the baby ocelot's face from the test mod's assets", "minecraft:textures/entity/cat/ocelot_baby.png 4,4 5x4 + 19,4 3x2 at 1,2");
+		assertFace(context, EntityTypes.OCELOT, true, "the baby ocelot's face from the test mod's assets", "minecraft:textures/entity/cat/ocelot_baby.png 32x32: 4,4 5x4 + 19,4 3x2 at 1,2");
 		//?}
-		assertFace(context, EntityTypes.CREEPER, false, "the creeper's built-in face", "minecraft:textures/entity/creeper/", " 8,8 8x8");
+		assertFace(context, EntityTypes.CREEPER, false, "the creeper's built-in face", "minecraft:textures/entity/creeper/creeper.png 64x32: 8,8 8x8");
 		settle(context, 40);
 		context.takeScreenshot("mob-faces-01-minimap");
 		context.setScreen(MapScreen::new);
@@ -1967,9 +1967,9 @@ public class DioramaClientTest implements FabricClientGameTest {
 				throw new AssertionError("The mob faces test pack didn't load");
 			}
 		});
-		assertFace(context, EntityTypes.CREEPER, false, "the creeper's face from the resource pack", "diorama_test:textures/mob_faces/creeper.png 0,0 8x8");
-		assertFace(context, EntityTypes.SHEEP, false, "the sheep's built-in face, its file in the pack being broken", "minecraft:textures/entity/sheep/", " 8,8 6x6");
-		assertFace(context, EntityTypes.OCELOT, false, "the ocelot's face from the test mod's assets, after the reload", "minecraft:textures/entity/cat/ocelot.png 5,5 5x4 + 2,26 3x2 at 1,2");
+		assertFace(context, EntityTypes.CREEPER, false, "the creeper's face from the resource pack", "diorama_test:textures/mob_faces/creeper.png 8x8: 0,0 8x8");
+		assertFace(context, EntityTypes.SHEEP, false, "the sheep's built-in face, its file in the pack being broken", "minecraft:textures/entity/sheep/sheep.png 64x32: 8,8 6x6");
+		assertFace(context, EntityTypes.OCELOT, false, "the ocelot's face from the test mod's assets, after the reload", "minecraft:textures/entity/cat/ocelot.png 64x32: 5,5 5x4 + 2,26 3x2 at 1,2");
 		settle(context, 40);
 		context.takeScreenshot("mob-faces-03-pack-minimap");
 		context.setScreen(MapScreen::new);
@@ -1979,7 +1979,7 @@ public class DioramaClientTest implements FabricClientGameTest {
 		context.setScreen(() -> null);
 
 		reloadPacks(context, mc -> mc.getResourcePackRepository().removePack(id));
-		assertFace(context, EntityTypes.CREEPER, false, "the creeper's built-in face, with the pack off again", "minecraft:textures/entity/creeper/", " 8,8 8x8");
+		assertFace(context, EntityTypes.CREEPER, false, "the creeper's built-in face, with the pack off again", "minecraft:textures/entity/creeper/creeper.png 64x32: 8,8 8x8");
 		settle(context, 20);
 		context.takeScreenshot("mob-faces-05-pack-off");
 		context.runOnClient(mc -> {
@@ -2003,8 +2003,8 @@ public class DioramaClientTest implements FabricClientGameTest {
 		context.waitTicks(10);
 	}
 
-	/** The face of a nearby mob of this kind (a baby or not), as MobFaces.describe gives it, has all of {@code parts} in it. */
-	private static void assertFace(ClientGameTestContext context, net.minecraft.world.entity.EntityType<?> type, boolean baby, String what, String... parts) {
+	/** The face of a nearby mob of this kind (a baby or not) is {@code expected}, as MobFaces.describe gives it. */
+	private static void assertFace(ClientGameTestContext context, net.minecraft.world.entity.EntityType<?> type, boolean baby, String what, String expected) {
 		String drawn = context.computeOnClient(mc -> {
 			for (net.minecraft.world.entity.Entity entity : mc.level.entitiesForRendering()) {
 				if (entity.getType() == type && entity instanceof net.minecraft.world.entity.LivingEntity living && living.isBaby() == baby
@@ -2014,10 +2014,8 @@ public class DioramaClientTest implements FabricClientGameTest {
 			}
 			return "no " + (baby ? "baby " : "") + type.toShortString() + " nearby";
 		});
-		for (String part : parts) {
-			if (!drawn.contains(part)) {
-				throw new AssertionError("Expected " + what + " (" + String.join(" ... ", parts) + "), but got: " + drawn);
-			}
+		if (!drawn.equals(expected)) {
+			throw new AssertionError("Expected " + what + ", " + expected + ", but got: " + drawn);
 		}
 	}
 

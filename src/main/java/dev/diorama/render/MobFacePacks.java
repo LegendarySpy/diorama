@@ -39,6 +39,8 @@ public final class MobFacePacks {
 	static final String DIRECTORY = "diorama/mob_faces";
 	/** Faces are drawn one texture pixel to at least one screen pixel, so a big one is a big icon. */
 	private static final int MAX_FACE = 32;
+	/** Each layer is a draw per mob per frame; the built-in faces use two at most. */
+	private static final int MAX_LAYERS = 8;
 	private static final Set<String> FACE_FIELDS = Set.of("texture", "texture_size", "face", "layers");
 	private static final Set<String> RECT_FIELDS = Set.of("u", "v", "width", "height");
 	private static final Set<String> LAYER_FIELDS = Set.of("u", "v", "width", "height", "x", "y");
@@ -156,6 +158,9 @@ public final class MobFacePacks {
 		JsonElement layersJson = json.get("layers");
 		if (layersJson != null) {
 			JsonArray array = array(layersJson, where + "layers");
+			if (array.size() > MAX_LAYERS) {
+				throw new IllegalArgumentException(where + "layers has " + array.size() + " pieces; a face can have at most " + MAX_LAYERS);
+			}
 			for (int i = 0; i < array.size(); i++) {
 				String at = where + "layers[" + i + "]";
 				JsonObject layer = object(array.get(i), at);

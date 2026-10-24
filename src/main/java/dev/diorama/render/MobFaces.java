@@ -165,8 +165,8 @@ public final class MobFaces {
 	}
 
 	/**
-	 * The face this entity is drawn with, as {@code "<texture> u,v wxh"} and then
-	 * {@code " + u,v wxh at x,y"} for each layer, or null if it has none to draw. For tests.
+	 * The face this entity is drawn with, as {@code "<texture> <texture width>x<texture height>: u,v wxh"}
+	 * and then {@code " + u,v wxh at x,y"} for each layer, or null if it has none to draw. For tests.
 	 */
 	public static @Nullable String describe(Entity entity) {
 		Face face = face(entity);
@@ -174,7 +174,7 @@ public final class MobFaces {
 		if (face == null || texture == null) {
 			return null;
 		}
-		StringBuilder out = new StringBuilder().append(texture).append(' ')
+		StringBuilder out = new StringBuilder().append(texture).append(' ').append(face.texW()).append('x').append(face.texH()).append(": ")
 			.append(face.u()).append(',').append(face.v()).append(' ').append(face.w()).append('x').append(face.h());
 		for (Piece p : face.layers()) {
 			out.append(" + ").append(p.u()).append(',').append(p.v()).append(' ').append(p.w()).append('x').append(p.h())

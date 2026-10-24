@@ -64,7 +64,7 @@ For a modded mob, read the numbers off its model the same way. In Blockbench, th
 |---|---|---|
 | `texture_size` | yes | `[width, height]` of the texture the rectangles are measured in, as the model declares it (`LayerDefinition.create(mesh, 64, 32)`). Measure in these units even when a high-resolution resource pack makes the image bigger: Diorama scales to fit. |
 | `face` | yes | The face: `u` and `v` (its top-left corner in the texture), `width` and `height`. At most 32 x 32. |
-| `layers` | no | Pieces drawn over the face in order, for a hat, a hood, a nose or a snout. Each has `u`, `v`, `width` and `height` like `face`, plus `x` and `y`: where its top-left corner goes, in pixels from the face's top-left corner (default 0). A layer must fit inside the face. |
+| `layers` | no | Pieces drawn over the face in order, for a hat, a hood, a nose or a snout. Each has `u`, `v`, `width` and `height` like `face`, plus `x` and `y`: where its top-left corner goes, in pixels from the face's top-left corner (default 0). A layer must fit inside the face, and a face can have at most 8. |
 | `texture` | no | A texture to cut the face from instead of the mob's own, such as `"examplemod:textures/entity/frog_knight_icon.png"`. See below. |
 | `baby` | no | The babies' face. Leave it out if babies are the adult model scaled down with the adult's texture: they get the adult's face. Set it to an object with the same fields (except `baby`) if babies have a texture of their own. Set it to `false` to show babies as dots. |
 
