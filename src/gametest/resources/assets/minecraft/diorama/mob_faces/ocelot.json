@@ -1,0 +1,14 @@
+{
+	"texture_size": [64, 32],
+	"face": {"u": 5, "v": 5, "width": 5, "height": 4},
+	"layers": [
+		{"u": 2, "v": 26, "width": 3, "height": 2, "x": 1, "y": 2}
+	],
+	"baby": {
+		"texture_size": [32, 32],
+		"face": {"u": 4, "v": 4, "width": 5, "height": 4},
+		"layers": [
+			{"u": 19, "v": 4, "width": 3, "height": 2, "x": 1, "y": 2}
+		]
+	}
+}

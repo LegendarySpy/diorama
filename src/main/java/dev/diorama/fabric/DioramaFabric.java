@@ -8,6 +8,7 @@ import dev.diorama.ServerRules;
 import dev.diorama.TrackedPlayers;
 import dev.diorama.WorldKey;
 import dev.diorama.XaeroChannels;
+import dev.diorama.render.MobFacePacks;
 import dev.diorama.waypoint.WaypointHud;
 import dev.diorama.waypoint.WaypointShare;
 import dev.diorama.waypoint.WaypointStore;
@@ -26,6 +27,7 @@ import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry;
 /*import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
 *///?}
 import net.minecraft.client.KeyMapping;
+import net.minecraft.server.packs.PackType;
 
 /**
  * Diorama's entrypoint on Fabric: registers the key bindings and the HUD, and hooks the mod up to
@@ -77,6 +79,25 @@ public final class DioramaFabric implements ClientModInitializer {
 			Waystones.clear();
 		});
 		XaeroChannels.register();
+		// Mob faces from resource packs, read again on every resource reload.
+		//? if >=26.1 {
+		net.fabricmc.fabric.api.resource.v1.ResourceLoader.get(PackType.CLIENT_RESOURCES).registerReloadListener(MobFacePacks.ID, MobFacePacks.LISTENER);
+		//?} else if >=1.21.9 {
+		/*net.fabricmc.fabric.api.resource.v1.ResourceLoader.get(PackType.CLIENT_RESOURCES).registerReloader(MobFacePacks.ID, MobFacePacks.LISTENER);
+		*///?} else {
+		/*net.fabricmc.fabric.api.resource.ResourceManagerHelper.get(PackType.CLIENT_RESOURCES).registerReloadListener(
+			new net.fabricmc.fabric.api.resource.SimpleSynchronousResourceReloadListener() {
+				@Override
+				public net.minecraft.resources.Identifier getFabricId() {
+					return MobFacePacks.ID;
+				}
+
+				@Override
+				public void onResourceManagerReload(net.minecraft.server.packs.resources.ResourceManager manager) {
+					MobFacePacks.reload(manager);
+				}
+			});
+		*///?}
 		// Leaving a world saves the map on the next tick, but closing the window stops ticking first.
 		ClientLifecycleEvents.CLIENT_STOPPING.register(mc -> MapSession.close());
 		ClientTickEvents.END_CLIENT_TICK.register(DioramaClient::tick);

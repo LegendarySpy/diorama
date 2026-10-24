@@ -2,6 +2,7 @@ package dev.diorama.render;
 
 import dev.diorama.render.gpu.MapCanvas;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
@@ -19,19 +20,28 @@ import org.jspecify.annotations.Nullable;
 
 /**
  * Mob faces for the radar, cut from each mob's own texture, so variants and resource packs show.
- * Only mobs whose face is one clean rectangle of their texture are listed; the rest stay dots.
+ * Only mobs whose face is one clean rectangle of their texture are listed; the rest stay dots,
+ * unless a resource pack gives them a face ({@link MobFacePacks}, which can replace these too).
  * Rectangles are read from the 26.3 models: a head box at texOffs(u, v) with size w x h x d has
  * its front face at (u + d, v + d), w x h.
  */
 public final class MobFaces {
 	/**
-	 * Where a face is in a texture of the given size. {@code hat} is an outer layer drawn over the
-	 * face (zombie and skeleton hats, villager hoods); {@code feature} is a nose or snout that
-	 * sticks out of the face, drawn at {@code (dx, dy)} in face pixels.
+	 * Where a face is in a texture of the given size: the mob's own texture, or {@code texture} if
+	 * set. {@code layers} are drawn over the face in order, each at {@code (dx, dy)} in face pixels.
 	 */
-	record Face(int texW, int texH, int u, int v, int w, int h, @Nullable Piece hat, @Nullable Piece feature) {
+	record Face(@Nullable Identifier texture, int texW, int texH, int u, int v, int w, int h, List<Piece> layers) {
 		Face(int texW, int texH, int u, int v, int w, int h) {
-			this(texW, texH, u, v, w, h, null, null);
+			this(null, texW, texH, u, v, w, h, List.of());
+		}
+
+		/**
+		 * A face with an outer {@code hat} layer (zombie and skeleton hats, villager hoods) and a
+		 * {@code feature}, a nose or snout that sticks out of the face, drawn under the hat.
+		 */
+		Face(int texW, int texH, int u, int v, int w, int h, @Nullable Piece hat, @Nullable Piece feature) {
+			this(null, texW, texH, u, v, w, h, feature == null ? hat == null ? List.of() : List.of(hat)
+				: hat == null ? List.of(feature) : List.of(feature, hat));
 		}
 	}
 
@@ -39,7 +49,7 @@ public final class MobFaces {
 	}
 
 	/** An adult face, and a baby's when babies have their own texture layout (or null for a dot). */
-	private record Faces(Face adult, @Nullable Face baby) {
+	record Faces(Face adult, @Nullable Face baby) {
 	}
 
 	private static final Map<EntityType<?>, Faces> FACES = new HashMap<>();
@@ -68,7 +78,7 @@ public final class MobFaces {
 	private static final Face COW = new Face(64, 32, 6, 6, 8, 8);
 	*///?}
 	/** Cold cows keep their muzzle elsewhere in the texture: their model moves its texture origin. */
-	private static final Piece COLD_COW_MUZZLE = new Piece(10, 34, 6, 3, 1, 5);
+	private static final Face COLD_COW = new Face(COW.texW(), COW.texH(), COW.u(), COW.v(), COW.w(), COW.h(), null, new Piece(10, 34, 6, 3, 1, 5));
 
 	static {
 		Face zombie = new Face(64, 64, 8, 8, 8, 8, HUMANOID_HAT, null);
@@ -150,23 +160,36 @@ public final class MobFaces {
 		return face(entity) != null;
 	}
 
-	/** Whether this entity's face can be drawn now: it has one, and its renderer gives a texture. For tests. */
+	/** Whether this entity's face can be drawn now: it has one, and there's a texture for it. For tests. */
 	public static boolean canDraw(Entity entity) {
-		return face(entity) != null && texture(entity) != null;
+		return drawnTexture(entity) != null;
+	}
+
+	/** The texture this entity's face is cut from, or null if it has none to draw. For tests. */
+	public static @Nullable Identifier drawnTexture(Entity entity) {
+		Face face = face(entity);
+		return face == null ? null : texture(entity, face);
 	}
 
 	private static @Nullable Face face(Entity entity) {
+		boolean baby = entity instanceof LivingEntity living && living.isBaby();
+		// A resource pack's face describes the textures it's used with, so it applies on every version.
+		Faces packed = MobFacePacks.get(entity.getType());
+		if (packed != null) {
+			return baby ? packed.baby() : packed.adult();
+		}
 		Faces faces = FACES.get(entity.getType());
 		if (faces == null) {
 			return null;
 		}
 		//? if >=26.1 {
-		return entity instanceof LivingEntity living && living.isBaby() ? faces.baby() : faces.adult();
+		Face face = baby ? faces.baby() : faces.adult();
 		//?} else {
 		/*// Before 26.1 a baby is its adult model scaled down, drawn with the adult texture, so it
 		// has the adult's face.
-		return faces.adult();
+		Face face = faces.adult();
 		*///?}
+		return face == COW && coldCow(entity) ? COLD_COW : face;
 	}
 
 	/**
@@ -175,7 +198,7 @@ public final class MobFaces {
 	 */
 	public static boolean draw(GuiGraphicsExtractor graphics, Entity entity, float x, float y, float size, int color) {
 		Face face = face(entity);
-		Identifier texture = face == null ? null : texture(entity);
+		Identifier texture = face == null ? null : texture(entity, face);
 		if (face == null || texture == null) {
 			return false;
 		}
@@ -185,17 +208,7 @@ public final class MobFaces {
 		graphics.pose().pushMatrix();
 		graphics.pose().translate(x - w / 2, y - h / 2);
 		graphics.pose().scale(scale);
-		MapCanvas canvas = MapCanvas.of(graphics);
-		canvas.blit(texture, 0, 0, face.u(), face.v(), face.w(), face.h(), face.texW(), face.texH(), color);
-		Piece feature = face == COW && coldCow(entity) ? COLD_COW_MUZZLE : face.feature();
-		if (feature != null) {
-			Piece p = feature;
-			canvas.blit(texture, p.dx(), p.dy(), p.u(), p.v(), p.w(), p.h(), face.texW(), face.texH(), color);
-		}
-		if (face.hat() != null) {
-			Piece p = face.hat();
-			canvas.blit(texture, p.dx(), p.dy(), p.u(), p.v(), p.w(), p.h(), face.texW(), face.texH(), color);
-		}
+		blitFace(graphics, texture, face, color);
 		graphics.pose().popMatrix();
 		return true;
 	}
@@ -207,24 +220,24 @@ public final class MobFaces {
 	 */
 	public static boolean drawPixel(GuiGraphicsExtractor graphics, Entity entity, float x, float y, float size, int color, int outline, int alpha) {
 		Face face = face(entity);
-		Identifier texture = face == null ? null : texture(entity);
+		Identifier texture = face == null ? null : texture(entity, face);
 		if (face == null || texture == null) {
 			return false;
 		}
 		float texel = Radar.texel(size, Math.max(face.w(), face.h()));
 		Radar.pixelFrame(graphics, x, y, face.w(), face.h(), texel, outline, alpha);
-		MapCanvas canvas = MapCanvas.of(graphics);
-		canvas.blit(texture, 0, 0, face.u(), face.v(), face.w(), face.h(), face.texW(), face.texH(), color);
-		Piece feature = face == COW && coldCow(entity) ? COLD_COW_MUZZLE : face.feature();
-		if (feature != null) {
-			canvas.blit(texture, feature.dx(), feature.dy(), feature.u(), feature.v(), feature.w(), feature.h(), face.texW(), face.texH(), color);
-		}
-		if (face.hat() != null) {
-			Piece p = face.hat();
-			canvas.blit(texture, p.dx(), p.dy(), p.u(), p.v(), p.w(), p.h(), face.texW(), face.texH(), color);
-		}
+		blitFace(graphics, texture, face, color);
 		graphics.pose().popMatrix();
 		return true;
+	}
+
+	/** The face at (0, 0), one texture pixel to one unit, with its layers over it. */
+	private static void blitFace(GuiGraphicsExtractor graphics, Identifier texture, Face face, int color) {
+		MapCanvas canvas = MapCanvas.of(graphics);
+		canvas.blit(texture, 0, 0, face.u(), face.v(), face.w(), face.h(), face.texW(), face.texH(), color);
+		for (Piece p : face.layers()) {
+			canvas.blit(texture, p.dx(), p.dy(), p.u(), p.v(), p.w(), p.h(), face.texW(), face.texH(), color);
+		}
 	}
 
 	/** Cold cows use a different model, with the muzzle elsewhere in the texture. */
@@ -236,6 +249,11 @@ public final class MobFaces {
 		/*// Cow variants came in 1.21.5.
 		return false;
 		*///?}
+	}
+
+	/** The face's own texture if it has one, otherwise the one the game draws this entity with. */
+	private static @Nullable Identifier texture(Entity entity, Face face) {
+		return face.texture() != null ? face.texture() : texture(entity);
 	}
 
 	/** The texture the game draws this entity with, from its renderer. */

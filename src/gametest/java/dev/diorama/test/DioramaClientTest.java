@@ -123,6 +123,9 @@ public class DioramaClientTest implements FabricClientGameTest {
 			if (tests.contains("radar")) {
 				radar(context, world);
 			}
+			if (tests.contains("mob-faces")) {
+				mobFaces(context, world);
+			}
 			if (tests.contains("waypoints")) {
 				waypoints(context, world);
 			}
@@ -1887,6 +1890,137 @@ public class DioramaClientTest implements FabricClientGameTest {
 	}
 
 	/**
+	 * Mob faces from resource packs. The test mod's own assets give the ocelot, a dot without them,
+	 * a face, the way a mod ships one for its mobs. Then a resource pack, switched on and off with
+	 * the reload F3+T runs, replaces the creeper's built-in face with an icon of its own, and leaves
+	 * the sheep's alone, since the pack's file for it is broken.
+	 */
+	private static void mobFaces(ClientGameTestContext context, TestSingleplayerContext world) {
+		world.getServer().runCommand("time set noon");
+		context.waitFor(mc -> mc.player.onGround(), 600);
+		BlockPos at = context.computeOnClient(mc -> mc.player.blockPosition());
+		int x = at.getX();
+		int y = at.getY();
+		int z = at.getZ();
+		world.getServer().runCommand("fill " + (x - 8) + " " + y + " " + (z - 8) + " " + (x + 8) + " " + (y + 4) + " " + (z + 8) + " air");
+		world.getServer().runCommand("fill " + (x - 8) + " " + (y - 1) + " " + (z - 8) + " " + (x + 8) + " " + (y - 1) + " " + (z + 8) + " grass_block");
+		String still = "{NoAI:1b,PersistenceRequired:1b,Silent:1b}";
+		world.getServer().runCommand("summon ocelot " + (x + 4) + " " + y + " " + (z - 3) + " " + still);
+		world.getServer().runCommand("summon creeper " + (x - 4) + " " + y + " " + (z - 3) + " " + still);
+		world.getServer().runCommand("summon sheep " + (x - 4) + " " + y + " " + (z + 4) + " " + still);
+		//? if >=26.1 {
+		// From 26.1 babies have textures of their own, and the file gives them their own face.
+		world.getServer().runCommand("summon ocelot " + (x + 4) + " " + y + " " + (z + 4) + " {NoAI:1b,PersistenceRequired:1b,Silent:1b,Age:-24000}");
+		//?}
+		context.waitTicks(20);
+		assertFaceTexture(context, EntityTypes.OCELOT, false, "minecraft:textures/entity/cat/ocelot.png", "the ocelot's face from the test mod's assets");
+		//? if >=26.1 {
+		assertFaceTexture(context, EntityTypes.OCELOT, true, "minecraft:textures/entity/cat/ocelot_baby.png", "the baby ocelot's face from the test mod's assets");
+		//?}
+		assertFaceTexture(context, EntityTypes.CREEPER, false, "minecraft:textures/entity/creeper/", "the creeper's built-in face");
+		settle(context, 40);
+		context.takeScreenshot("mob-faces-01-minimap");
+		context.setScreen(MapScreen::new);
+		lookAtPlayer(context, 9.0, TileKey.SURFACE);
+		settle(context, 40);
+		context.takeScreenshot("mob-faces-02-map");
+		context.setScreen(() -> null);
+
+		String id = "file/diorama-test-mob-faces";
+		java.nio.file.Path pack = context.computeOnClient(mc -> mc.getResourcePackDirectory().resolve("diorama-test-mob-faces"));
+		context.runOnClient(mc -> {
+			try {
+				java.nio.file.Files.createDirectories(pack);
+				//? if >=1.21.9 {
+				int format = net.minecraft.SharedConstants.getCurrentVersion().packVersion(net.minecraft.server.packs.PackType.CLIENT_RESOURCES).major();
+				String formats = "\"pack_format\": " + format + ", \"min_format\": " + format + ", \"max_format\": " + format;
+				//?} else {
+				/*int format = net.minecraft.SharedConstants.getCurrentVersion().getPackVersion(net.minecraft.server.packs.PackType.CLIENT_RESOURCES);
+				String formats = "\"pack_format\": " + format;
+				*///?}
+				java.nio.file.Files.writeString(pack.resolve("pack.mcmeta"), "{\"pack\": {" + formats + ", \"description\": \"Diorama test: mob faces\"}}");
+			} catch (java.io.IOException e) {
+				throw new java.io.UncheckedIOException(e);
+			}
+			for (String file : new String[] {
+				"assets/minecraft/diorama/mob_faces/creeper.json",
+				"assets/minecraft/diorama/mob_faces/sheep.json",
+				"assets/diorama_test/diorama/mob_faces/no_such_mob.json",
+				"assets/diorama_test/textures/mob_faces/creeper.png"}) {
+				fixture("/mob-faces-pack/" + file, pack.resolve(file));
+			}
+		});
+		reloadPacks(context, mc -> {
+			mc.getResourcePackRepository().reload();
+			if (!mc.getResourcePackRepository().addPack(id)) {
+				throw new AssertionError("The mob faces test pack didn't load");
+			}
+		});
+		assertFaceTexture(context, EntityTypes.CREEPER, false, "diorama_test:textures/mob_faces/creeper.png", "the creeper's face from the resource pack");
+		assertFaceTexture(context, EntityTypes.SHEEP, false, "minecraft:textures/entity/sheep/", "the sheep's built-in face, its file in the pack being broken");
+		assertFaceTexture(context, EntityTypes.OCELOT, false, "minecraft:textures/entity/cat/ocelot.png", "the ocelot's face from the test mod's assets, after the reload");
+		settle(context, 40);
+		context.takeScreenshot("mob-faces-03-pack-minimap");
+		context.setScreen(MapScreen::new);
+		lookAtPlayer(context, 9.0, TileKey.SURFACE);
+		settle(context, 40);
+		context.takeScreenshot("mob-faces-04-pack-map");
+		context.setScreen(() -> null);
+
+		reloadPacks(context, mc -> mc.getResourcePackRepository().removePack(id));
+		assertFaceTexture(context, EntityTypes.CREEPER, false, "minecraft:textures/entity/creeper/", "the creeper's built-in face, with the pack off again");
+		settle(context, 20);
+		context.takeScreenshot("mob-faces-05-pack-off");
+		context.runOnClient(mc -> {
+			try (java.util.stream.Stream<java.nio.file.Path> files = java.nio.file.Files.walk(pack)) {
+				files.sorted(java.util.Comparator.reverseOrder()).forEach(path -> path.toFile().delete());
+			} catch (java.io.IOException e) {
+				throw new java.io.UncheckedIOException(e);
+			}
+		});
+		world.getServer().runCommand("kill @e[type=!player]");
+		context.waitTicks(10);
+	}
+
+	/** Changes the resource packs and reloads them, as F3+T does, and waits until the game is back. */
+	private static void reloadPacks(ClientGameTestContext context, java.util.function.Consumer<Minecraft> change) {
+		java.util.concurrent.CompletableFuture<Void> done = context.computeOnClient(mc -> {
+			change.accept(mc);
+			return mc.reloadResourcePacks();
+		});
+		context.waitFor(mc -> done.isDone() && mc.gui.overlay() == null, 2400);
+		context.waitTicks(10);
+	}
+
+	/** The face of the nearest mob of this kind (a baby or not) is cut from a texture whose name has {@code texture} in it. */
+	private static void assertFaceTexture(ClientGameTestContext context, net.minecraft.world.entity.EntityType<?> type, boolean baby, String texture, String what) {
+		String drawn = context.computeOnClient(mc -> {
+			for (net.minecraft.world.entity.Entity entity : mc.level.entitiesForRendering()) {
+				if (entity.getType() == type && entity instanceof net.minecraft.world.entity.LivingEntity living && living.isBaby() == baby
+					&& entity.distanceToSqr(mc.player) < 16 * 16) {
+					return String.valueOf(dev.diorama.render.MobFaces.drawnTexture(entity));
+				}
+			}
+			return "no " + (baby ? "baby " : "") + type.toShortString() + " nearby";
+		});
+		if (!drawn.contains(texture)) {
+			throw new AssertionError("Expected " + what + ", cut from " + texture + ", but got: " + drawn);
+		}
+	}
+
+	private static void fixture(String resource, java.nio.file.Path to) {
+		try (java.io.InputStream in = DioramaClientTest.class.getResourceAsStream(resource)) {
+			if (in == null) {
+				throw new AssertionError("Missing fixture " + resource);
+			}
+			java.nio.file.Files.createDirectories(to.getParent());
+			java.nio.file.Files.copy(in, to, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+		} catch (java.io.IOException e) {
+			throw new AssertionError(e);
+		}
+	}
+
+	/**
 	 * Waypoints: one nearby and one far off, the in-world label, the map tooltip, adding one by
 	 * right-clicking the map, the list, a death marker, and the file on disk.
 	 */
@@ -3258,15 +3392,7 @@ public class DioramaClientTest implements FabricClientGameTest {
 	}
 
 	private static void xaeroFixture(String name, java.nio.file.Path to) {
-		try (java.io.InputStream in = DioramaClientTest.class.getResourceAsStream("/xaero/" + name)) {
-			if (in == null) {
-				throw new AssertionError("Missing fixture " + name);
-			}
-			java.nio.file.Files.createDirectories(to.getParent());
-			java.nio.file.Files.copy(in, to, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-		} catch (java.io.IOException e) {
-			throw new AssertionError(e);
-		}
+		fixture("/xaero/" + name, to);
 	}
 
 	/** Presses a button the way a click does. */
@@ -3814,10 +3940,10 @@ public class DioramaClientTest implements FabricClientGameTest {
 		}
 		if (env == null || env.isBlank()) {
 			//? if >=1.21.4 && fabric {
-			return Set.of("tour", "radar", "waypoints", "xaero-import", "fog-of-war", "settings", "overlays", "screens", "dimensions", "saved-map", "multiplayer", "server-id", "tracked-players", "realms");
+			return Set.of("tour", "radar", "mob-faces", "waypoints", "xaero-import", "fog-of-war", "settings", "overlays", "screens", "dimensions", "saved-map", "multiplayer", "server-id", "tracked-players", "realms");
 			//?} else {
 			/*// On NeoForge and before 1.21.4 the tests run on src/gameshim, which can't start a dedicated server.
-			return Set.of("tour", "radar", "waypoints", "xaero-import", "fog-of-war", "settings", "overlays", "screens", "dimensions", "saved-map");
+			return Set.of("tour", "radar", "mob-faces", "waypoints", "xaero-import", "fog-of-war", "settings", "overlays", "screens", "dimensions", "saved-map");
 			*///?}
 		}
 		return Set.of(env.split(","));
