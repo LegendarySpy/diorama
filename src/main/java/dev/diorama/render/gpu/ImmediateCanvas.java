@@ -53,6 +53,44 @@ final class ImmediateCanvas implements MapCanvas {
 	}
 
 	@Override
+	public void solids(float[] xyz, int[] colors, int quads) {
+		BufferBuilder mesh = this.begin(DefaultVertexFormat.POSITION_COLOR);
+		for (int i = 0; i < quads * 4; i++) {
+			mesh.addVertex(xyz[i * 3], xyz[i * 3 + 1], xyz[i * 3 + 2]).setColor(colors[i / 4]);
+		}
+		LegacyShaders.draw(LegacyShaders.SOLID, mesh.buildOrThrow());
+	}
+
+	@Override
+	public void blits(ResourceLocation texture, float[] xyz, float[] uvs, int[] colors, int quads) {
+		BufferBuilder mesh = this.mesh(xyz, uvs, colors, quads);
+		//? if >=1.21.5 {
+		RenderSystem.setShaderTexture(0, Minecraft.getInstance().getTextureManager().getTexture(texture).getTexture());
+		//?} else {
+		RenderSystem.setShaderTexture(0, texture);
+		//?}
+		LegacyShaders.draw(LegacyShaders.TEXTURED, mesh.buildOrThrow());
+		unbind(0);
+	}
+
+	@Override
+	public void rects(MapTexture texture, Sampling sampling, float[] xyz, float[] uvs, int[] colors, int quads) {
+		BufferBuilder mesh = this.mesh(xyz, uvs, colors, quads);
+		((LegacyTexture) texture).bind(0, sampling);
+		LegacyShaders.draw(LegacyShaders.TEXTURED, mesh.buildOrThrow());
+		unbind(0);
+	}
+
+	// Textured quads whose corners are already in GUI coordinates.
+	private BufferBuilder mesh(float[] xyz, float[] uvs, int[] colors, int quads) {
+		BufferBuilder mesh = this.begin(DefaultVertexFormat.POSITION_TEX_COLOR);
+		for (int i = 0; i < quads * 4; i++) {
+			mesh.addVertex(xyz[i * 3], xyz[i * 3 + 1], xyz[i * 3 + 2]).setUv(uvs[i * 2], uvs[i * 2 + 1]).setColor(colors[i / 4]);
+		}
+		return mesh;
+	}
+
+	@Override
 	public void playerFace(AbstractClientPlayer player, int x, int y, int size, int argb) {
 		// The face and the hat layer over it, as vanilla's PlayerFaceRenderer cuts them from a skin.
 		ResourceLocation skin = player.getSkin().texture();
@@ -61,12 +99,15 @@ final class ImmediateCanvas implements MapCanvas {
 	}
 
 	@Override
-	public void fog(MapTexture mask, MapTexture noise, int x, int y, int width, int height, float u0, float v0, float u1, float v1, int params) {
+	public void fog(MapTexture mask, MapTexture noise, float[] corners, float[] uvs, int x, int y, int width, int height, int params) {
 		if (!LegacyShaders.fogReady()) {
 			return;
 		}
 		BufferBuilder mesh = this.begin(DefaultVertexFormat.POSITION_TEX_COLOR);
-		this.rect(mesh, x, y, x + width, y + height, u0, v0, u1, v1, params);
+		Matrix4f pose = this.graphics.pose().last().pose();
+		for (int i = 0; i < 4; i++) {
+			mesh.addVertex(pose, corners[i * 2], corners[i * 2 + 1], 0).setUv(uvs[i * 2], uvs[i * 2 + 1]).setColor(params);
+		}
 		((LegacyTexture) mask).bind(0, Sampling.CLAMP_LINEAR);
 		((LegacyTexture) noise).bind(1, Sampling.REPEAT_LINEAR);
 		LegacyShaders.drawFog(mesh.buildOrThrow());

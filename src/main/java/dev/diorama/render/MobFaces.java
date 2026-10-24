@@ -1,6 +1,5 @@
 package dev.diorama.render;
 
-import dev.diorama.render.gpu.MapCanvas;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -209,7 +208,7 @@ public final class MobFaces {
 	 * Draws an entity's face centred on (x, y), fitted in a square {@code size} across, keeping
 	 * the face's proportions. Returns false if it has no face icon.
 	 */
-	public static boolean draw(GuiGraphicsExtractor graphics, Entity entity, float x, float y, float size, int color) {
+	public static boolean draw(IconBatch icons, Entity entity, float x, float y, float size, int color) {
 		Face face = face(entity);
 		Identifier texture = face == null ? null : texture(entity, face);
 		if (face == null || texture == null) {
@@ -218,10 +217,11 @@ public final class MobFaces {
 		float scale = size / Math.max(face.w(), face.h());
 		float w = face.w() * scale;
 		float h = face.h() * scale;
+		GuiGraphicsExtractor graphics = icons.graphics();
 		graphics.pose().pushMatrix();
 		graphics.pose().translate(x - w / 2, y - h / 2);
 		graphics.pose().scale(scale);
-		blitFace(graphics, texture, face, color);
+		blitFace(icons, texture, face, color);
 		graphics.pose().popMatrix();
 		return true;
 	}
@@ -231,25 +231,25 @@ public final class MobFaces {
 	 * each texel a whole number of screen pixels, with a one-texel outline and a drop shadow.
 	 * Returns false if it has no face icon.
 	 */
-	public static boolean drawPixel(GuiGraphicsExtractor graphics, Entity entity, float x, float y, float size, int color, int outline, int alpha) {
+	public static boolean drawPixel(IconBatch icons, Entity entity, float x, float y, float size, int color, int outline, int alpha) {
 		Face face = face(entity);
 		Identifier texture = face == null ? null : texture(entity, face);
 		if (face == null || texture == null) {
 			return false;
 		}
 		float texel = Radar.texel(size, Math.max(face.w(), face.h()));
-		Radar.pixelFrame(graphics, x, y, face.w(), face.h(), texel, outline, alpha);
-		blitFace(graphics, texture, face, color);
+		Radar.pixelFrame(icons, x, y, face.w(), face.h(), texel, outline, alpha);
+		blitFace(icons, texture, face, color);
+		GuiGraphicsExtractor graphics = icons.graphics();
 		graphics.pose().popMatrix();
 		return true;
 	}
 
 	/** The face at (0, 0), one texture pixel to one unit, with its layers over it. */
-	private static void blitFace(GuiGraphicsExtractor graphics, Identifier texture, Face face, int color) {
-		MapCanvas canvas = MapCanvas.of(graphics);
-		canvas.blit(texture, 0, 0, face.u(), face.v(), face.w(), face.h(), face.texW(), face.texH(), color);
+	private static void blitFace(IconBatch icons, Identifier texture, Face face, int color) {
+		icons.blit(texture, 0, 0, face.u(), face.v(), face.w(), face.h(), face.texW(), face.texH(), color);
 		for (Piece p : face.layers()) {
-			canvas.blit(texture, p.dx(), p.dy(), p.u(), p.v(), p.w(), p.h(), face.texW(), face.texH(), color);
+			icons.blit(texture, p.dx(), p.dy(), p.u(), p.v(), p.w(), p.h(), face.texW(), face.texH(), color);
 		}
 	}
 

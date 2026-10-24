@@ -48,6 +48,19 @@ public interface MapCanvas {
 	 */
 	void blit(Identifier texture, int x, int y, int u, int v, int w, int h, int texW, int texH, int argb);
 
+	/**
+	 * Many untextured quads in one draw. Unlike the other calls these take their corners already
+	 * in GUI coordinates, without the current pose: x y z for each of four corners per quad, in
+	 * {@link #rect}'s order, and one colour per quad.
+	 */
+	void solids(float[] xyz, int[] colors, int quads);
+
+	/** Many quads of one game texture in one draw, like {@link #solids}, with u v for each corner. */
+	void blits(Identifier texture, float[] xyz, float[] uvs, int[] colors, int quads);
+
+	/** Many quads of one of the mod's textures in one draw, like {@link #blits}. */
+	void rects(MapTexture texture, Sampling sampling, float[] xyz, float[] uvs, int[] colors, int quads);
+
 	/** A player's face with its hat layer, {@code size} across, at (x, y). */
 	void playerFace(AbstractClientPlayer player, int x, int y, int size, int argb);
 
@@ -55,5 +68,15 @@ public interface MapCanvas {
 	 * The fog over a view: the known-area mask in sampler 0 (clamped), the noise in sampler 1
 	 * (repeating), and the shader's parameters packed into the vertex colour. Clipped to the view.
 	 */
-	void fog(MapTexture mask, MapTexture noise, int x, int y, int width, int height, float u0, float v0, float u1, float v1, int params);
+	default void fog(MapTexture mask, MapTexture noise, int x, int y, int width, int height, float u0, float v0, float u1, float v1, int params) {
+		this.fog(
+			mask, noise,
+			new float[] {x, y, x, y + height, x + width, y + height, x + width, y},
+			new float[] {u0, v0, u0, v1, u1, v1, u1, v0},
+			x, y, width, height, params
+		);
+	}
+
+	/** The same over one quad of a view (a piece of the round minimap), still clipped to the view. */
+	void fog(MapTexture mask, MapTexture noise, float[] corners, float[] uvs, int x, int y, int width, int height, int params);
 }
