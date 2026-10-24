@@ -162,13 +162,26 @@ public final class MobFaces {
 
 	/** Whether this entity's face can be drawn now: it has one, and there's a texture for it. For tests. */
 	public static boolean canDraw(Entity entity) {
-		return drawnTexture(entity) != null;
+		return describe(entity) != null;
 	}
 
-	/** The texture this entity's face is cut from, or null if it has none to draw. For tests. */
-	public static @Nullable Identifier drawnTexture(Entity entity) {
+	/**
+	 * The face this entity is drawn with, as {@code "<texture> u,v wxh"} and then
+	 * {@code " + u,v wxh at x,y"} for each layer, or null if it has none to draw. For tests.
+	 */
+	public static @Nullable String describe(Entity entity) {
 		Face face = face(entity);
-		return face == null ? null : texture(entity, face);
+		Identifier texture = face == null ? null : texture(entity, face);
+		if (face == null || texture == null) {
+			return null;
+		}
+		StringBuilder out = new StringBuilder().append(texture).append(' ')
+			.append(face.u()).append(',').append(face.v()).append(' ').append(face.w()).append('x').append(face.h());
+		for (Piece p : face.layers()) {
+			out.append(" + ").append(p.u()).append(',').append(p.v()).append(' ').append(p.w()).append('x').append(p.h())
+				.append(" at ").append(p.dx()).append(',').append(p.dy());
+		}
+		return out.toString();
 	}
 
 	private static @Nullable Face face(Entity entity) {
@@ -253,7 +266,14 @@ public final class MobFaces {
 
 	/** The face's own texture if it has one, otherwise the one the game draws this entity with. */
 	private static @Nullable Identifier texture(Entity entity, Face face) {
-		return face.texture() != null ? face.texture() : texture(entity);
+		if (face.texture() != null) {
+			return face.texture();
+		}
+		Identifier texture = texture(entity);
+		if (texture == null) {
+			MobFacePacks.noTexture(entity.getType());
+		}
+		return texture;
 	}
 
 	/** The texture the game draws this entity with, from its renderer. */
@@ -271,23 +291,27 @@ public final class MobFaces {
 	@SuppressWarnings({"unchecked", "rawtypes"})
 	private static @Nullable Identifier lookUp(Entity entity) {
 		//? if >=1.21.2 {
+		// Only living-entity renderers say which texture they use. Others, such as GeckoLib's, don't:
+		// a resource pack's face for such a mob needs a texture of its own.
 		EntityRenderer<?, ?> renderer = Minecraft.getInstance().getEntityRenderDispatcher().getRenderer(entity);
-		//?} else {
-		/*EntityRenderer<?> renderer = Minecraft.getInstance().getEntityRenderDispatcher().getRenderer(entity);
-		*///?}
 		if (!(renderer instanceof LivingEntityRenderer living)) {
 			return null;
 		}
 		try {
-			//? if >=1.21.2 {
 			LivingEntityRenderState state = (LivingEntityRenderState) ((LivingEntityRenderer) living).createRenderState((LivingEntity) entity, 1.0F);
 			return ((LivingEntityRenderer) living).getTextureLocation(state);
-			//?} else {
-			/*// Renderers had no render state yet and asked the entity directly.
-			return ((LivingEntityRenderer) living).getTextureLocation((LivingEntity) entity);
-			*///?}
 		} catch (RuntimeException e) {
 			return null;
 		}
+		//?} else {
+		/*// Renderers had no render state yet, and every one, GeckoLib's too, said which texture it
+		// draws an entity with.
+		EntityRenderer<?> renderer = Minecraft.getInstance().getEntityRenderDispatcher().getRenderer(entity);
+		try {
+			return ((EntityRenderer) renderer).getTextureLocation(entity);
+		} catch (RuntimeException e) {
+			return null;
+		}
+		*///?}
 	}
 }

@@ -10,6 +10,7 @@ import java.io.IOException;
 import java.io.Reader;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -43,6 +44,7 @@ public final class MobFacePacks {
 	private static final Set<String> LAYER_FIELDS = Set.of("u", "v", "width", "height", "x", "y");
 
 	private static @Nullable Map<EntityType<?>, MobFaces.Faces> faces;
+	private static final Set<EntityType<?>> warnedNoTexture = new HashSet<>();
 
 	private MobFacePacks() {
 	}
@@ -61,6 +63,19 @@ public final class MobFacePacks {
 	/** Reads the files again; runs on the game thread at the end of each resource reload. */
 	public static void reload(ResourceManager manager) {
 		faces = load(manager);
+		warnedNoTexture.clear();
+	}
+
+	/**
+	 * Says once per reload when a mob with a face from a file draws as a dot because its renderer
+	 * doesn't say which texture it uses (from 1.21.2, any renderer that isn't a living-entity one).
+	 */
+	static void noTexture(EntityType<?> type) {
+		Map<EntityType<?>, MobFaces.Faces> loaded = faces;
+		if (loaded != null && loaded.containsKey(type) && warnedNoTexture.add(type)) {
+			Diorama.LOGGER.warn("Mob face for {}: its renderer doesn't say which texture it draws the mob with, so it shows as a dot."
+				+ " Give the face a \"texture\" of its own.", BuiltInRegistries.ENTITY_TYPE.getKey(type));
+		}
 	}
 
 	private static Map<EntityType<?>, MobFaces.Faces> load(ResourceManager manager) {

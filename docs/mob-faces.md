@@ -54,7 +54,7 @@ That gives `assets/minecraft/diorama/mob_faces/ocelot.json`:
 }
 ```
 
-Put it in a resource pack, turn the pack on, and ocelots show their faces on the minimap and the fullscreen map.
+Put it in a resource pack, turn the pack on, and ocelots show their faces on the minimap and the fullscreen map. Before 26.1 a baby ocelot is the adult model scaled down, drawn with the adult texture, so for those versions leave `baby` out.
 
 For a modded mob, read the numbers off its model the same way. In Blockbench, the face's rectangle is the head cube's front face in the UV editor.
 
@@ -69,6 +69,8 @@ For a modded mob, read the numbers off its model the same way. In Blockbench, th
 | `baby` | no | The babies' face. Leave it out if babies are the adult model scaled down with the adult's texture: they get the adult's face. Set it to an object with the same fields (except `baby`) if babies have a texture of their own. Set it to `false` to show babies as dots. |
 
 Rectangles are in texture pixels with (0, 0) at the top left. Without `texture`, Diorama cuts the face from whatever texture the game draws that mob with right now, so variants (a tamed wolf, a cold cow) and resource packs that retexture the mob still show.
+
+Diorama asks the mob's renderer for that texture. From Minecraft 1.21.2 only renderers built on vanilla's `LivingEntityRenderer` can say; others, such as GeckoLib's `GeoEntityRenderer`, can't, and their mobs need a `texture` (the log says so when one is missing). Before 1.21.2 every renderer can say.
 
 ## Icons of their own
 
@@ -101,3 +103,4 @@ Other messages:
 - `unknown field`: a field Diorama doesn't know, most likely a typo. The rest of the file still applies.
 - `there's no mob examplemod:frog_knigt in this game`: the file name doesn't match a mob. Either it's misspelt, or the mod isn't installed, which is fine for a modpack that covers optional mods.
 - `texture ... isn't in any resource pack`: the `texture` path is wrong. The radar would show the missing-texture pattern.
+- `its renderer doesn't say which texture it draws the mob with`: the mob's renderer isn't a `LivingEntityRenderer` (see above). Give the face a `texture`.
