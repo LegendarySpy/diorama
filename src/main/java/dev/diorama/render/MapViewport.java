@@ -157,8 +157,9 @@ public final class MapViewport {
 		int tv0 = (int) Math.floor(v0 / units);
 		int tu1 = (int) Math.floor(u1 / units);
 		int tv1 = (int) Math.floor(v1 / units);
-		// Minified tiles blend across mips; magnified ones stay crisp so blocks keep their edges.
-		Sampling sampling = view.zoom() >= Projection.PIXELS_PER_UNIT ? Sampling.TILE_CRISP : Sampling.TILE_SMOOTH;
+		// Let the sampler decide from the actual screen footprint, including GUI scale:
+		// blend mipmaps when shrinking, keep texel edges crisp when enlarging.
+		Sampling sampling = Sampling.TILE_CRISP;
 		MapCanvas canvas = MapCanvas.of(graphics);
 		float size = (float) (units * view.zoom());
 		Circle circle = view.round() ? Circle.in(view) : null;
