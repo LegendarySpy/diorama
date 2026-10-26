@@ -78,6 +78,11 @@ public final class Settings {
 	public boolean roundedFog = true;
 	public boolean alwaysFogOfWar = false;
 	/**
+	 * Singleplayer: draws the chunks in the world's save that you haven't been near, such as an
+	 * area a pre-generation tool made, onto the sky view.
+	 */
+	public boolean mapSavedChunks = true;
+	/**
 	 * Fast is for slower computers: the map takes one sample per pixel instead of four, so it
 	 * fills in about four times sooner, and the fog draws two layers instead of eight, without
 	 * lighting them from the sun.

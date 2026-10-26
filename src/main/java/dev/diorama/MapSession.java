@@ -6,6 +6,7 @@ import dev.diorama.bake.TileKey;
 import dev.diorama.data.ChunkSnapshot;
 import dev.diorama.data.Copycats;
 import dev.diorama.render.MapLevel;
+import dev.diorama.render.SavedChunkImport;
 import java.nio.file.Path;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
@@ -44,6 +45,8 @@ public final class MapSession {
 
 	private final ClientLevel level;
 	private final MapLevel map;
+	/** Draws the save's chunks the map hasn't seen, in singleplayer; null elsewhere. */
+	private final @Nullable SavedChunkImport savedChunks;
 	private final Map<Long, Pending> pending = new LinkedHashMap<>();
 	private boolean underground;
 	private MapStyle style = MapStyle.get();
@@ -53,6 +56,15 @@ public final class MapSession {
 		// The Nether's roof: its sky view looks down from just under it.
 		int roof = level.dimensionType().hasCeiling() ? level.getMinY() + level.dimensionType().logicalHeight() : MapLevel.NO_ROOF;
 		this.map = new MapLevel(level.getMinY(), level.getMaxY() + 1, roof, mapFolder(level, key));
+		this.savedChunks = Settings.get().mapSavedChunks ? SavedChunkImport.start(this.map, level) : null;
+	}
+
+	/** Stops drawing saved chunks, then saves and closes the map. */
+	private void end() {
+		if (this.savedChunks != null) {
+			this.savedChunks.stop();
+		}
+		this.map.close();
 	}
 
 	/** {@code .minecraft/diorama/<world>/<dimension>}, or null outside a world. */
@@ -82,7 +94,7 @@ public final class MapSession {
 	/** Saves and ends the session. For closing the game; leaving a world is noticed by {@link #tick}. */
 	public static void close() {
 		if (current != null) {
-			current.map.close();
+			current.end();
 			current = null;
 		}
 	}
@@ -120,7 +132,7 @@ public final class MapSession {
 	 */
 	private static @Nullable MapSession forLevel(@Nullable ClientLevel level) {
 		if (current != null && current.level != level) {
-			current.map.close();
+			current.end();
 			current = null;
 		}
 		if (level != null && current == null) {

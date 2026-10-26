@@ -75,19 +75,12 @@ public final class ChunkSnapshot {
 		LevelChunkSection[] sections = chunk.getSections();
 		this.states = new PalettedContainer[sections.length];
 		this.uniform = new BlockState[sections.length];
-		// The game never writes into a section's biome container: new biomes arrive in a new one,
-		// swapped in. So holding the containers keeps the biomes as they are now, without copying.
 		this.biomes = new PalettedContainerRO[9][];
 		for (int dx = -1; dx <= 1; dx++) {
 			for (int dz = -1; dz <= 1; dz++) {
 				ChunkAccess around = dx == 0 && dz == 0 ? chunk : level.getChunkSource().getChunk(this.chunkX + dx, this.chunkZ + dz, ChunkStatus.BIOMES, false);
 				if (around != null) {
-					LevelChunkSection[] aroundSections = around.getSections();
-					PalettedContainerRO<Holder<Biome>>[] biomes = new PalettedContainerRO[aroundSections.length];
-					for (int i = 0; i < aroundSections.length; i++) {
-						biomes[i] = aroundSections[i] == null ? null : aroundSections[i].getBiomes();
-					}
-					this.biomes[(dx + 1) * 3 + dz + 1] = biomes;
+					this.biomes[(dx + 1) * 3 + dz + 1] = biomesOf(around.getSections());
 				}
 			}
 		}
@@ -98,19 +91,8 @@ public final class ChunkSnapshot {
 		this.blockLight = new DataLayer[sections.length];
 		this.skyLight = new DataLayer[sections.length];
 		LevelLightEngine light = level.getLightEngine();
+		this.keepStates(sections, true);
 		for (int i = 0; i < sections.length; i++) {
-			LevelChunkSection section = sections[i];
-			if (section != null && !section.hasOnlyAir()) {
-				PalettedContainer<BlockState> states = section.getStates();
-				// A single-block section's palette copies as itself, and a later chunk packet can
-				// rewrite it in place. Keep just the block so the snapshot never changes under a bake.
-				BlockState single = Sections.singleValue(states);
-				if (single != null) {
-					this.uniform[i] = single;
-				} else {
-					this.states[i] = states.copy();
-				}
-			}
 			SectionPos pos = SectionPos.of(this.chunkX, this.minSectionY + i, this.chunkZ);
 			DataLayer block = light.getLayerListener(LightLayer.BLOCK).getDataLayerData(pos);
 			DataLayer sky = light.getLayerListener(LightLayer.SKY).getDataLayerData(pos);
@@ -133,6 +115,82 @@ public final class ChunkSnapshot {
 		// Water and shallow overhangs can hide blocks below the motion-blocking height.
 		this.floorY = floor == Integer.MAX_VALUE ? chunk.getMinY() : floor - 24;
 		this.copycats = Copycats.INSTALLED ? copycats(chunk, sections.length) : null;
+	}
+
+	/**
+	 * A snapshot of a chunk read from the world's save, for places the client never loaded.
+	 * {@code around} is it and its eight neighbours as read, indexed like {@link #biomes}, null
+	 * where the save has none: only their biomes are used.
+	 */
+	@SuppressWarnings("unchecked")
+	private ChunkSnapshot(SavedChunk chunk, @Nullable SavedChunk[] around, ClientLevel level) {
+		this.chunkX = chunk.chunkX();
+		this.chunkZ = chunk.chunkZ();
+		this.minSectionY = level.getMinSectionY();
+		LevelChunkSection[] sections = chunk.sections();
+		this.states = new PalettedContainer[sections.length];
+		this.uniform = new BlockState[sections.length];
+		// Read from the save for this snapshot alone: nothing else holds or changes them.
+		this.keepStates(sections, false);
+		this.biomes = new PalettedContainerRO[9][];
+		for (int i = 0; i < 9; i++) {
+			if (around[i] != null) {
+				this.biomes[i] = biomesOf(around[i].sections());
+			}
+		}
+		this.biomeZoomSeed = ((BiomeManagerAccessor) level.getBiomeManager()).diorama$biomeZoomSeed();
+		this.blendRadius = Minecraft.getInstance().options.biomeBlendRadius().get();
+		this.fallbackBiome = level.registryAccess().lookupOrThrow(Registries.BIOME).getOrThrow(Biomes.PLAINS);
+		this.hasSkyLight = level.dimensionType().hasSkyLight();
+		this.blockLight = chunk.blockLight();
+		this.skyLight = chunk.skyLight();
+		int top = Integer.MIN_VALUE;
+		int floor = Integer.MAX_VALUE;
+		for (int i = 0; i < 256; i++) {
+			top = Math.max(top, chunk.surface()[i]);
+			floor = Math.min(floor, chunk.solid()[i]);
+			this.surface[i] = chunk.surface()[i];
+		}
+		this.maxY = top <= level.getMinY() ? Integer.MIN_VALUE : top;
+		this.floorY = floor - 24;
+		// Copycats keep their material in block entity data, which the save holds as raw NBT.
+		this.copycats = null;
+	}
+
+	/** A snapshot of a chunk read from the save; see {@link SavedChunk}. */
+	public static ChunkSnapshot fromSave(SavedChunk chunk, @Nullable SavedChunk[] around, ClientLevel level) {
+		return new ChunkSnapshot(chunk, around, level);
+	}
+
+	/** Keeps each section's blocks: just the block for single-block sections, else the container, copied if asked. */
+	private void keepStates(@Nullable LevelChunkSection[] sections, boolean copy) {
+		for (int i = 0; i < sections.length; i++) {
+			LevelChunkSection section = sections[i];
+			if (section != null && !section.hasOnlyAir()) {
+				PalettedContainer<BlockState> states = section.getStates();
+				// A single-block section's palette copies as itself, and a later chunk packet can
+				// rewrite it in place. Keep just the block so the snapshot never changes under a bake.
+				BlockState single = Sections.singleValue(states);
+				if (single != null) {
+					this.uniform[i] = single;
+				} else {
+					this.states[i] = copy ? states.copy() : states;
+				}
+			}
+		}
+	}
+
+	/**
+	 * A chunk's biome containers. The game never writes into one: new biomes arrive in a new one,
+	 * swapped in. So holding them keeps the biomes as they are now, without copying.
+	 */
+	@SuppressWarnings("unchecked")
+	private static @Nullable PalettedContainerRO<Holder<Biome>>[] biomesOf(@Nullable LevelChunkSection[] sections) {
+		PalettedContainerRO<Holder<Biome>>[] biomes = new PalettedContainerRO[sections.length];
+		for (int i = 0; i < sections.length; i++) {
+			biomes[i] = sections[i] == null ? null : sections[i].getBiomes();
+		}
+		return biomes;
 	}
 
 	/** What the chunk's copycats are filled with, by section, or null if none are filled. */

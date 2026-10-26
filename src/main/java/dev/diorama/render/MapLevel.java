@@ -74,10 +74,13 @@ public final class MapLevel implements ChunkSource {
 	private final SeenBlocks seen;
 	/** Where this dimension's map is saved, or null when there's no world to save it for. */
 	private final @Nullable Path folder;
-	/** Saved tiles for the current camera angle, or null when nothing is saved. Render thread. */
-	private @Nullable TileStore store;
+	/**
+	 * Saved tiles for the current camera angle, or null when nothing is saved. Changed on the
+	 * render thread; volatile for {@link SavedChunkImport}, which reads it from its own.
+	 */
+	private volatile @Nullable TileStore store;
 	/** The folder {@link #store} saves into; see {@link #storeName()}. */
-	private String storeName = "";
+	private volatile String storeName = "";
 	private volatile boolean fogOfWar;
 	/** What bakes record for the map overlays, or null when no overlay is on. */
 	private volatile @Nullable Overlays overlays;
@@ -97,6 +100,9 @@ public final class MapLevel implements ChunkSource {
 	private final Map<TileKey, Double> wanted = new HashMap<>();
 	private final Set<TileKey> inFlight = new HashSet<>();
 	private final ConcurrentLinkedQueue<TileImage> finished = new ConcurrentLinkedQueue<>();
+	/** Tiles drawn from the world's save by {@link SavedChunkImport}, to be saved and shown. */
+	private final ConcurrentLinkedQueue<TileImage> imported = new ConcurrentLinkedQueue<>();
+	private final AtomicInteger importedWaiting = new AtomicInteger();
 	/** Overview tiles the writer rebuilt; reloaded when next wanted. */
 	private final ConcurrentLinkedQueue<TileKey> overviewChanged = new ConcurrentLinkedQueue<>();
 	/** Overview tiles with nothing saved under them; not asked for again until that changes. */
@@ -586,6 +592,19 @@ public final class MapLevel implements ChunkSource {
 				this.store.baked(image);
 			}
 		}
+		while ((image = this.imported.poll()) != null) {
+			this.importedWaiting.decrementAndGet();
+			TileStore store = this.store;
+			if (this.closed || store == null || image.generation() != this.generation(image.key())) {
+				continue;
+			}
+			MapTile tile = this.tiles.get(image.key());
+			if (tile != null) {
+				tile.upload(image);
+				this.coverageVersion++;
+			}
+			store.baked(image);
+		}
 		if (this.trimStuck && System.currentTimeMillis() - this.lastTrimMs >= TRIM_RETRY_MS) {
 			this.trimChunks();
 		}
@@ -953,5 +972,45 @@ public final class MapLevel implements ChunkSource {
 
 	public int bakingCount() {
 		return this.inFlight.size();
+	}
+
+	/**
+	 * Where {@link SavedChunkImport} keeps its progress: the folder the sky view's tiles are saved
+	 * in, or null when saved chunks mustn't be drawn there. With nothing saved there's nowhere to
+	 * draw them, and under a roof with fog of war the sky view may only show what the player saw.
+	 */
+	public @Nullable Path importFolder() {
+		if (this.closed || this.folder == null || this.store == null || this.roofless() && this.fogOfWar) {
+			return null;
+		}
+		return this.folder.resolve(this.storeName);
+	}
+
+	/**
+	 * Bakes a sky view tile from {@code source} on the calling thread, merged with what's saved
+	 * like any bake, and hands it to the render thread to be saved and shown. Waits while two are
+	 * already waiting, so a long import never piles up tiles. Returns the generation it was baked
+	 * under, for checking it wasn't dropped; see {@link #importGeneration}.
+	 */
+	int bakeImported(TileKey key, ChunkSource source, BlockLooks looks, java.util.function.BooleanSupplier stopped) throws InterruptedException {
+		int generation = this.generation(key);
+		TileStore store = this.store;
+		if (store == null) {
+			return generation;
+		}
+		int[] saved = store.read(key);
+		TileImage image = TileBaker.bake(key, source, looks, null, false, saved, null);
+		image = image.withSpots(TileSpots.pick(image, source, looks, false, store.spots(key))).withGeneration(generation);
+		while (this.importedWaiting.get() >= 2 && !stopped.getAsBoolean()) {
+			Thread.sleep(5);
+		}
+		this.importedWaiting.incrementAndGet();
+		this.imported.add(image);
+		return generation;
+	}
+
+	/** The generation a tile baked now would carry; a bake from an older one is dropped. */
+	int importGeneration(TileKey key) {
+		return this.generation(key);
 	}
 }
