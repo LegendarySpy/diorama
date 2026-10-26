@@ -5,8 +5,8 @@ import java.util.Comparator;
 import java.util.List;
 
 /**
- * The player arrow as a little voxel model: a dart shape built from one-unit blocks on the world
- * grid, seen through the map's own camera and lit by its sun, with its shadow on the ground and a
+ * The player arrow as a little voxel model: a dart shape built from one-unit blocks in its own
+ * coordinates, rotated as one rigid model, seen through the map's own camera and lit by its sun, with its shadow on the ground and a
  * dark rim. Pure pixels at four texels per GUI pixel, so it stays sharp at GUI scale 4 and below.
  */
 public final class ArrowArt {
@@ -34,8 +34,8 @@ public final class ArrowArt {
 		// The sides in shade take a darker accent, as the blue arrow's did.
 		int shade = PinArt.mix(accent, 0x000000, 0.33F);
 		float s = size * 1.15F;
-		float[] outer = turn(dart(s), yawDegrees);
-		float[] inner = turn(dart(s * 0.5F), yawDegrees);
+		float[] outer = dart(s);
+		float[] inner = dart(s * 0.5F);
 		int range = (int) (size * 1.3F) + 2;
 		List<int[]> cells = new ArrayList<>();
 		for (int i = -range; i <= range; i++) {
@@ -45,25 +45,20 @@ public final class ArrowArt {
 				}
 			}
 		}
-		// Centre the drawn blocks on the canvas, so the arrow sits on the player's spot at every heading.
-		double minX = Double.MAX_VALUE, maxX = -Double.MAX_VALUE, minY = Double.MAX_VALUE, maxY = -Double.MAX_VALUE;
+		// Rotate the same cells at every heading, rather than sampling a different silhouette
+		// on the world grid. Keep the model's origin fixed at the player's spot.
 		List<double[]> corners = new ArrayList<>();
+		List<Object[]> faces = new ArrayList<>();
 		for (int[] c : cells) {
+			float[] base = turn(new float[] {c[0], c[1], c[0] + 1, c[1], c[0] + 1, c[1] + 1, c[0], c[1] + 1}, yawDegrees);
 			for (int k = 0; k < 4; k++) {
-				double x = c[0] + (k == 1 || k == 2 ? 1 : 0);
-				double z = c[1] + (k >= 2 ? 1 : 0);
 				for (int y = 0; y <= 1; y++) {
-					corners.add(new double[] {x, y, z});
-					double sx = x;
-					double sy = z * sin - y * cos;
-					minX = Math.min(minX, sx);
-					maxX = Math.max(maxX, sx);
-					minY = Math.min(minY, sy);
-					maxY = Math.max(maxY, sy);
+					corners.add(new double[] {base[k * 2], y, base[k * 2 + 1]});
 				}
 			}
+			prism(faces, base, c[2] == 1 ? accent : WHITE, shade);
 		}
-		Canvas canvas = new Canvas(GUI_SIZE / 2.0 - (minX + maxX) / 2, GUI_SIZE / 2.0 - (minY + maxY) / 2, sin);
+		Canvas canvas = new Canvas(GUI_SIZE / 2.0, GUI_SIZE / 2.0, sin);
 		// The shadow: every corner pushed down to the ground along the sunlight, then their outline.
 		List<double[]> flat = new ArrayList<>();
 		for (double[] p : corners) {
@@ -77,10 +72,7 @@ public final class ArrowArt {
 			shadow[i * 2 + 1] = hull.get(i)[1] * sin;
 		}
 		canvas.cast(shadow);
-		cells.sort(Comparator.comparingInt(c -> c[1]));
-		for (int[] c : cells) {
-			prism(canvas, c[0], c[1], c[2] == 1 ? accent : WHITE, sin, cos, shade);
-		}
+		drawFaces(canvas, faces, sin, cos);
 		return canvas.result(0.28F, 1.0F);
 	}
 
@@ -104,11 +96,15 @@ public final class ArrowArt {
 		return out;
 	}
 
-	/** One block: its top and the sides the camera sees, far ones first. */
-	private static void prism(Canvas canvas, int i, int j, int top, double sin, double cos, int shade) {
-		double[][] base = {{i, j}, {i + 1, j}, {i + 1, j + 1}, {i, j + 1}};
-		List<Object[]> faces = new ArrayList<>();
-		faces.add(new Object[] {new double[][] {{i, 1, j}, {i + 1, 1, j}, {i + 1, 1, j + 1}, {i, 1, j + 1}}, top, new double[] {0, 1, 0}});
+	/** Adds a rotated block's top and sides; all blocks are depth-sorted together when drawn. */
+	private static void prism(List<Object[]> faces, float[] rotated, int top, int shade) {
+		double[][] base = new double[4][2];
+		double[][] roof = new double[4][3];
+		for (int k = 0; k < 4; k++) {
+			base[k] = new double[] {rotated[k * 2], rotated[k * 2 + 1]};
+			roof[k] = new double[] {base[k][0], 1, base[k][1]};
+		}
+		faces.add(new Object[] {roof, top, new double[] {0, 1, 0}});
 		double area = 0;
 		for (int k = 0; k < 4; k++) {
 			area += base[k][0] * base[(k + 1) % 4][1] - base[(k + 1) % 4][0] * base[k][1];
@@ -119,6 +115,9 @@ public final class ArrowArt {
 			double[] n = {sign * (z1 - z0), 0, -sign * (x1 - x0)};
 			faces.add(new Object[] {new double[][] {{x0, 0, z0}, {x1, 0, z1}, {x1, 1, z1}, {x0, 1, z0}}, material(n, shade), n});
 		}
+	}
+
+	private static void drawFaces(Canvas canvas, List<Object[]> faces, double sin, double cos) {
 		List<Object[]> shown = new ArrayList<>();
 		for (Object[] f : faces) {
 			double[] n = (double[]) f[2];
