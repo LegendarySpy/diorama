@@ -361,19 +361,20 @@ public final class TileBaker {
 	}
 
 	/** Records a surface-only trace landing on water at height {@code y}. */
-	private void landedOnWater(int waterId, int x, int bz, double y, double z) {
+	private void landedOnWater(int waterId, int x, int by, int bz, double y) {
 		this.albedo(waterId, x, bz, true);
-		this.surfaceLight = this.waterLight(x, y, z);
+		this.surfaceLight = this.waterLight(x, by, bz, y);
 		this.surfaceY = (float) y;
 		this.surfaceTop = true;
 	}
 
-	/** What lights water whose surface is at (x, y, z) in a cave slice; see {@link TileSurface#caveLight}. */
-	private int waterLight(int x, double y, double z) {
-		int above = (int) Math.floor(y);
-		int cz = (int) Math.floor(z);
+	/**
+	 * What lights water block (x, by, bz), seen at height {@code y}, in a cave slice: the light
+	 * above it, as {@link #mixWater} lights it; see {@link TileSurface#caveLight}.
+	 */
+	private int waterLight(int x, int by, int bz, double y) {
 		float fade = 1 - Math.min(0.5F, (float) (this.startY - y) / 60.0F);
-		return TileSurface.caveLight(this.reader.blockLight(x, above, cz), this.reader.skyLight(x, above, cz), 1, fade, 0);
+		return TileSurface.caveLight(this.reader.blockLight(x, by + 1, bz), this.reader.skyLight(x, by + 1, bz), 1, fade, 0);
 	}
 
 	private static int srgb(float r, float g, float b) {
@@ -753,7 +754,7 @@ public final class TileBaker {
 					if (this.surfaceOnly) {
 						// Water over the block is the ground there.
 						if (waterId >= 0) {
-							this.landedOnWater(waterId, x, waterBz, y0 - waterT * sin, z0 - waterT * cos);
+							this.landedOnWater(waterId, x, waterBy, waterBz, y0 - waterT * sin);
 						} else {
 							this.landed(id, x, by, bz, fx, y0 - t * sin, z0 - t * cos, enteredTop, partial);
 						}
@@ -782,7 +783,7 @@ public final class TileBaker {
 						this.mixWater(waterId, x, waterBy, waterBz, u, z0, waterT, t, sample);
 						if (this.cave) {
 							// Lit as water, as a surface trace records it.
-							this.surfaceLight = this.waterLight(x, y0 - waterT * sin, z0 - waterT * cos);
+							this.surfaceLight = this.waterLight(x, waterBy, waterBz, y0 - waterT * sin);
 						}
 					}
 					return true;
@@ -828,7 +829,7 @@ public final class TileBaker {
 		}
 		if (this.surfaceOnly) {
 			if (waterId >= 0) {
-				this.landedOnWater(waterId, x, waterBz, y0 - waterT * sin, z0 - waterT * cos);
+				this.landedOnWater(waterId, x, waterBy, waterBz, y0 - waterT * sin);
 			}
 			return true;
 		}
@@ -844,7 +845,7 @@ public final class TileBaker {
 			this.outB = 0;
 			this.mixWater(waterId, x, waterBy, waterBz, u, z0, waterT, waterT + 64, sample);
 			if (this.cave) {
-				this.surfaceLight = this.waterLight(x, y0 - waterT * sin, z0 - waterT * cos);
+				this.surfaceLight = this.waterLight(x, waterBy, waterBz, y0 - waterT * sin);
 			}
 		} else {
 			this.outR = 0.01F;
