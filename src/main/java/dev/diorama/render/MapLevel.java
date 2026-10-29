@@ -575,7 +575,8 @@ public final class MapLevel implements ChunkSource {
 		BlockLooks looks = BlockLooks.get();
 		if (tile.surfacePending == null && looks != null && (tile.surface == null || tile.surface.revision() != tile.pixelsRevision)) {
 			int revision = tile.pixelsRevision;
-			tile.surfacePending = CompletableFuture.supplyAsync(() -> TileBaker.surface(key, revision, this, looks), BAKERS)
+			boolean fog = this.fogOfWar;
+			tile.surfacePending = CompletableFuture.supplyAsync(() -> TileBaker.surface(key, revision, this, looks, fog), BAKERS)
 				.exceptionally(e -> {
 					Diorama.LOGGER.warn("Couldn't find the ground under tile {}", key, e);
 					return null;
