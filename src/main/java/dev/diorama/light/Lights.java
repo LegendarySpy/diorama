@@ -3,6 +3,7 @@ package dev.diorama.light;
 import dev.diorama.Diorama;
 import dev.diorama.MapStyle;
 import dev.diorama.Projection;
+import dev.diorama.Settings;
 import dev.diorama.bake.BlockLooks;
 import dev.diorama.bake.Mipmaps;
 import dev.diorama.bake.SurfaceArea;
@@ -14,7 +15,9 @@ import dev.diorama.render.MapViewport;
 import dev.diorama.render.gpu.MapCanvas;
 import dev.diorama.render.gpu.MapTexture;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.PriorityQueue;
@@ -22,6 +25,7 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.world.entity.player.Player;
@@ -46,14 +50,15 @@ import org.jspecify.annotations.Nullable;
 public final class Lights {
 	private final ClientLevel level;
 	private final MapLevel map;
-	/** The last overlay made for each player's light. */
+	/** The last overlay made for each group of lights, by its first light's player. */
 	private final Map<UUID, Glow> glows = new HashMap<>();
 
-	/** One light's overlay: {@code width} by {@code height} map pixels from (pu0, pv0) in an {@code edge}-square texture. */
+	/** A group of lights' overlay: {@code width} by {@code height} map pixels from (pu0, pv0) in an {@code edge}-square texture. */
 	private static final class Glow {
 		@Nullable Object madeFor;
 		@Nullable MapTexture texture;
 		int edge;
+		int layer;
 		int pu0;
 		int pv0;
 		int width;
@@ -86,49 +91,88 @@ public final class Lights {
 		return stack.getItem() instanceof BlockItem item ? item.getBlock().defaultBlockState().getLightEmission() : 0;
 	}
 
-	/** Draws the carried lights over a view of a cave slice. */
-	public void draw(GuiGraphicsExtractor graphics, MapViewport.View view, float partialTick, float opacity) {
-		if (view.layer() == TileKey.SURFACE) {
+	/** A light carried at block (sx, sy, sz), and the map pixels (pu0, pv0) to (pu1, pv1) it can light. */
+	private record Held(UUID id, int sx, int sy, int sz, int carried, int pu0, int pv0, int pu1, int pv1) {
+		static Held of(UUID id, int sx, int sy, int sz, int carried) {
+			double sin = Projection.sin();
+			double cos = Projection.cos();
+			int ppu = Projection.PIXELS_PER_UNIT;
+			int reach = carried - 1;
+			return new Held(id, sx, sy, sz, carried, (sx - reach) * ppu, (int) Math.floor(((sz - reach) * sin - (sy + reach + 1) * cos) * ppu),
+				(sx + reach + 1) * ppu, (int) Math.ceil(((sz + reach + 1) * sin - (sy - reach) * cos) * ppu));
+		}
+
+		boolean touches(Held other) {
+			return this.pu0 < other.pu1 && other.pu0 < this.pu1 && this.pv0 < other.pv1 && other.pv0 < this.pv1;
+		}
+	}
+
+	/**
+	 * Draws the carried lights over a view of a cave slice. Other players' lights only where
+	 * {@code radar} is on and it would show them: a light gives its holder away no more than
+	 * their face would.
+	 */
+	public void draw(GuiGraphicsExtractor graphics, MapViewport.View view, float partialTick, float opacity, boolean radar) {
+		Player self = Minecraft.getInstance().player;
+		if (view.layer() == TileKey.SURFACE || this.map.roofless() || self == null) {
+			this.close();
 			return;
 		}
-		MapStyle style = MapStyle.get();
-		List<Glow> drawn = new ArrayList<>();
+		List<Held> held = new ArrayList<>();
 		for (Player player : this.level.players()) {
 			int carried = carried(player);
-			if (carried <= 0) {
-				drop(this.glows.remove(player.getUUID()));
+			if (carried <= 0 || player != self && !(radar && onRadar(player, self, partialTick))) {
 				continue;
 			}
 			Vec3 eye = player.getEyePosition(partialTick);
 			// Held at about shoulder height.
-			int sx = (int) Math.floor(eye.x);
 			int sy = (int) Math.floor(eye.y - 0.5);
-			int sz = (int) Math.floor(eye.z);
-			if (sy > view.layer()) {
+			if (sy <= view.layer()) {
+				held.add(Held.of(player.getUUID(), (int) Math.floor(eye.x), sy, (int) Math.floor(eye.z), carried));
+			}
+		}
+		double ppu = Projection.PIXELS_PER_UNIT;
+		double vu0 = view.minU() * ppu;
+		double vv0 = view.minV() * ppu;
+		double vu1 = vu0 + view.width() / view.zoom() * ppu;
+		double vv1 = vv0 + view.height() / view.zoom() * ppu;
+		MapStyle style = MapStyle.get();
+		Map<UUID, Glow> kept = new HashMap<>();
+		List<Glow> drawn = new ArrayList<>();
+		for (List<Held> group : groups(held)) {
+			// Each group keeps the overlay one of its lights had, so it stays up until the next is made.
+			Glow glow = null;
+			for (Held light : group) {
+				Glow old = this.glows.remove(light.id());
+				if (glow == null) {
+					glow = old;
+				} else {
+					drop(old);
+				}
+			}
+			if (glow == null) {
+				glow = new Glow();
+			}
+			kept.put(group.get(0).id(), glow);
+			int pu0 = group.stream().mapToInt(Held::pu0).min().getAsInt();
+			int pv0 = group.stream().mapToInt(Held::pv0).min().getAsInt();
+			int pu1 = group.stream().mapToInt(Held::pu1).max().getAsInt();
+			int pv1 = group.stream().mapToInt(Held::pv1).max().getAsInt();
+			if (pu1 <= vu0 || pu0 >= vu1 || pv1 <= vv0 || pv0 >= vv1) {
 				continue;
 			}
-			Glow glow = this.glows.computeIfAbsent(player.getUUID(), id -> new Glow());
-			this.make(glow, sx, sy, sz, carried, view.layer(), style);
-			if (glow.lit && glow.texture != null) {
+			this.make(glow, group, pu0, pv0, pu1, pv1, view.layer(), style);
+			// Not one made for another slice while this one's is made.
+			if (glow.lit && glow.texture != null && glow.layer == view.layer()) {
 				drawn.add(glow);
 			}
 		}
-		List<UUID> here = this.level.players().stream().map(Player::getUUID).toList();
-		this.glows.entrySet().removeIf(entry -> {
-			if (here.contains(entry.getKey())) {
-				return false;
-			}
-			drop(entry.getValue());
-			return true;
-		});
-		if (drawn.isEmpty()) {
-			return;
-		}
-		graphics.enableScissor(view.x(), view.y(), view.x() + view.width(), view.y() + view.height());
+		this.glows.values().forEach(Lights::drop);
+		this.glows.clear();
+		this.glows.putAll(kept);
 		MapCanvas canvas = MapCanvas.of(graphics);
 		Circle circle = view.round() ? Circle.in(view) : null;
 		int tint = Math.round(Math.max(0, Math.min(1, opacity)) * 255) << 24 | 0xFFFFFF;
-		double ppu = Projection.PIXELS_PER_UNIT;
 		for (Glow glow : drawn) {
 			float x0 = view.screenX(glow.pu0 / ppu);
 			float y0 = view.screenY(glow.pv0 / ppu);
@@ -145,15 +189,42 @@ public final class Lights {
 				canvas.rect(glow.texture, MapViewport.sampling(view), x0, y0, x1, y1, 0, 0, tu, tv, tint);
 			}
 		}
-		graphics.disableScissor();
+	}
+
+	/** Whether the radar shows {@code player} to {@code self}, as it does other players. */
+	private static boolean onRadar(Player player, Player self, float partialTick) {
+		Settings settings = Settings.get();
+		return settings.radarPlayers && player.isAlive() && !player.isInvisibleTo(self) && (!player.isSpectator() || self.isSpectator())
+			&& Math.abs(player.getPosition(partialTick).y - self.getPosition(partialTick).y) <= settings.radarRange;
 	}
 
 	/**
-	 * Makes a light's overlay again if it moved to another block, changed strength, or the
-	 * ground under it is better known: the pixels it lights brighter than their tile shows. Made
-	 * on the light thread; the last one made stays up until the next is ready.
+	 * The lights in groups whose patches touch, each made as one overlay so that where they cross
+	 * the brighter one shows, whatever order they're drawn in. Each group is in id order.
 	 */
-	private void make(Glow glow, int sx, int sy, int sz, int carried, int layer, MapStyle style) {
+	private static List<List<Held>> groups(List<Held> held) {
+		List<List<Held>> groups = new ArrayList<>();
+		for (Held light : held) {
+			List<Held> joined = new ArrayList<>(List.of(light));
+			for (Iterator<List<Held>> it = groups.iterator(); it.hasNext(); ) {
+				List<Held> group = it.next();
+				if (group.stream().anyMatch(light::touches)) {
+					joined.addAll(group);
+					it.remove();
+				}
+			}
+			joined.sort(Comparator.comparing(Held::id));
+			groups.add(joined);
+		}
+		return groups;
+	}
+
+	/**
+	 * Makes a group's overlay again if a light moved to another block, changed strength, or the
+	 * ground under them is better known: the pixels they light brighter than their tile shows.
+	 * Made on the light thread; the last one made stays up until the next is ready.
+	 */
+	private void make(Glow glow, List<Held> group, int pu0, int pv0, int pu1, int pv1, int layer, MapStyle style) {
 		if (glow.pending != null) {
 			if (!glow.pending.isDone()) {
 				return;
@@ -164,22 +235,14 @@ public final class Lights {
 				show(glow, made);
 			}
 		}
-		double sin = Projection.sin();
-		double cos = Projection.cos();
-		int ppu = Projection.PIXELS_PER_UNIT;
-		int reach = carried - 1;
-		int pu0 = (sx - reach) * ppu;
-		int pu1 = (sx + reach + 1) * ppu;
-		int pv0 = (int) Math.floor(((sz - reach) * sin - (sy + reach + 1) * cos) * ppu);
-		int pv1 = (int) Math.ceil(((sz + reach + 1) * sin - (sy - reach) * cos) * ppu);
 		SurfaceArea area = this.map.surfaces(layer, pu0, pv0, pu1, pv1);
-		List<Object> key = List.of(sx, sy, sz, carried, layer, style, sin, java.util.Arrays.asList(area.tiles()));
+		List<Object> key = List.of(group, layer, style, Projection.sin(), java.util.Arrays.asList(area.tiles()));
 		if (key.equals(glow.madeFor)) {
 			return;
 		}
 		glow.madeFor = key;
 		VoxelReader reader = new VoxelReader(this.map, BlockLooks.get());
-		glow.pending = CompletableFuture.supplyAsync(() -> build(reader, area, sx, sy, sz, carried, pu0, pv0, pu1 - pu0, pv1 - pv0, style), WORKER)
+		glow.pending = CompletableFuture.supplyAsync(() -> build(reader, area, group, layer, pu0, pv0, pu1 - pu0, pv1 - pv0, style), WORKER)
 			.exceptionally(e -> {
 				Diorama.LOGGER.warn("Couldn't light the map around a held light", e);
 				return null;
@@ -187,16 +250,18 @@ public final class Lights {
 	}
 
 	/** An overlay made: its mips, or null where it lights nothing brighter than the tiles. */
-	private record Made(int pu0, int pv0, int width, int height, int edge, int @Nullable [][] mips) {
+	private record Made(int layer, int pu0, int pv0, int width, int height, int edge, int @Nullable [][] mips) {
 	}
 
-	private static Made build(VoxelReader reader, SurfaceArea area, int sx, int sy, int sz, int carried, int pu0, int pv0, int width, int height, MapStyle style) {
+	private static Made build(VoxelReader reader, SurfaceArea area, List<Held> group, int layer, int pu0, int pv0, int width, int height, MapStyle style) {
 		double sin = Projection.sin();
 		double cos = Projection.cos();
 		int ppu = Projection.PIXELS_PER_UNIT;
-		int reach = carried - 1;
-		int side = 2 * reach + 1;
-		float[] levels = spread(reader, sx, sy, sz, carried, reach, side);
+		float[][] levels = new float[group.size()][];
+		for (int i = 0; i < levels.length; i++) {
+			Held light = group.get(i);
+			levels[i] = spread(reader, light.sx(), light.sy(), light.sz(), light.carried(), light.carried() - 1, 2 * light.carried() - 1);
+		}
 		int step = 1 << (Mipmaps.LEVELS - 1);
 		int edge = (Math.max(width, height) + step - 1) / step * step;
 		int[] pixels = new int[edge * edge];
@@ -211,12 +276,20 @@ public final class Lights {
 					continue;
 				}
 				// Half a block out from the surface the camera sees here, into the open space in
-				// front of it, relative to the corner of the cube the light spread over.
+				// front of it.
 				boolean top = area.top(pu, pv);
-				double qx = (pu + 0.5) / ppu - sx + reach;
-				double qy = y + (top ? 0.5 : 0) - sy + reach;
-				double qz = ((pv + 0.5) / ppu + y * cos) / sin + (top ? 0 : 0.5) - sz + reach;
-				float light = smooth(levels, side, reader, sx - reach, sy - reach, sz - reach, qx, qy, qz);
+				double wx = (pu + 0.5) / ppu;
+				double wy = y + (top ? 0.5 : 0);
+				double wz = ((pv + 0.5) / ppu + y * cos) / sin + (top ? 0 : 0.5);
+				float light = 0;
+				for (int i = 0; i < levels.length; i++) {
+					Held held = group.get(i);
+					int reach = held.carried() - 1;
+					int x0 = held.sx() - reach;
+					int y0 = held.sy() - reach;
+					int z0 = held.sz() - reach;
+					light = Math.max(light, smooth(levels[i], 2 * reach + 1, reader, x0, y0, z0, wx - x0, wy - y0, wz - z0));
+				}
 				int own = area.blockLight(pu, pv);
 				if (light > own) {
 					// Faded in over its first level, so the lit patch has no edge against the tile.
@@ -226,7 +299,7 @@ public final class Lights {
 				}
 			}
 		}
-		return new Made(pu0, pv0, width, height, edge, lit ? Mipmaps.build(pixels, edge) : null);
+		return new Made(layer, pu0, pv0, width, height, edge, lit ? Mipmaps.build(pixels, edge) : null);
 	}
 
 	/** Puts a made overlay up in place of the last. Render thread. */
@@ -246,6 +319,7 @@ public final class Lights {
 			glow.texture.write(level, 0, 0, made.edge() >> level, made.mips()[level]);
 		}
 		glow.edge = made.edge();
+		glow.layer = made.layer();
 		glow.pu0 = made.pu0();
 		glow.pv0 = made.pv0();
 		glow.width = made.width();
