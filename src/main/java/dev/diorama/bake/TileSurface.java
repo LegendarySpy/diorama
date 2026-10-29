@@ -7,11 +7,12 @@ package dev.diorama.bake;
  *
  * <p>Per pixel: {@code y} is the ground's world y (its x is the pixel's u, and its z follows from
  * u, v and y), NaN where the map knows nothing; {@code top} whether it's a top face (else a south
- * one); {@code albedo} the pixel as drawn with its light taken out, in sRGB as 0xRRGGBB, so water
- * keeps its depth; and {@code light}, what lit it there ({@link #caveLight}), so a moving light
- * can light it again.
+ * one); {@code albedo} the pixel as drawn with its light taken out, in sRGB as 0xAARRGGBB with the
+ * pixel's alpha, so water keeps its depth and edges their coverage; {@code light}, what lit it
+ * there ({@link #caveLight}), so a moving light can light it again; and {@code outlined}, whether
+ * the style's outline darkens it.
  */
-public record TileSurface(int revision, float[] y, boolean[] top, int[] albedo, int[] light) {
+public record TileSurface(int revision, float[] y, boolean[] top, int[] albedo, int[] light, boolean[] outlined) {
 	/**
 	 * Packs what lights a surface in a cave slice: block and sky light levels (0..15), corner
 	 * occlusion and depth fade (0..1), and the block's own light level (0..15).

@@ -41,7 +41,8 @@ public record SurfaceArea(int tileU0, int tileV0, int columns, int rows, @Nullab
 
 	/**
 	 * Map pixel (pu, pv) of a cave slice lit as its tile was, but with block light
-	 * {@code blockLight}: an ABGR pixel in the style's grade, {@code alpha} (0..255) opaque.
+	 * {@code blockLight}: an ABGR pixel in the style's grade and outline, {@code alpha} (0..255) of
+	 * the tile pixel's own alpha.
 	 */
 	public int relit(int pu, int pv, float blockLight, int alpha, MapStyle style, float[] scratch) {
 		TileSurface surface = this.at(pu, pv);
@@ -49,6 +50,7 @@ public record SurfaceArea(int tileU0, int tileV0, int columns, int rows, @Nullab
 		surface.caveLight(i, blockLight, scratch);
 		int albedo = surface.albedo()[i];
 		float[] lin = TileBaker.SRGB_TO_LINEAR;
-		return TileBaker.abgr(style, lin[albedo >> 16 & 0xFF] * scratch[0], lin[albedo >> 8 & 0xFF] * scratch[1], lin[albedo & 0xFF] * scratch[2], alpha);
+		int pixel = TileBaker.abgr(style, lin[albedo >> 16 & 0xFF] * scratch[0], lin[albedo >> 8 & 0xFF] * scratch[1], lin[albedo & 0xFF] * scratch[2], alpha * (albedo >>> 24) / 255);
+		return surface.outlined()[i] ? TileBaker.darken(pixel, 1 - style.outline()) : pixel;
 	}
 }

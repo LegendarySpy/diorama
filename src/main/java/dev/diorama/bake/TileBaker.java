@@ -312,42 +312,45 @@ public final class TileBaker {
 
 	/**
 	 * What each pixel of a cave slice's tile shows, for lights drawn over it: where its camera ray
-	 * lands, which way the face there points, its colour with its light taken out, and what lit
-	 * it. Water counts as ground at its surface. Any thread.
+	 * lands, which way the face there points, the pixel as baked with its light taken out, and
+	 * what lit it. Water counts as ground at its surface. With {@code fogOfWar}, ground not seen
+	 * yet has none, as the tile shows none. Any thread.
 	 */
-	public static TileSurface surface(TileKey key, int revision, ChunkSource source, BlockLooks looks) {
-		TileBaker baker = new TileBaker(key, source, looks, false, null);
+	public static TileSurface surface(TileKey key, int revision, ChunkSource source, BlockLooks looks, boolean fogOfWar) {
+		TileBaker baker = new TileBaker(key, source, looks, fogOfWar, null);
 		int size = Projection.TILE_PIXELS;
-		TileSurface surface = new TileSurface(revision, new float[size * size], new boolean[size * size], new int[size * size], new int[size * size]);
+		TileSurface surface = new TileSurface(revision, new float[size * size], new boolean[size * size], new int[size * size], new int[size * size], new boolean[size * size]);
 		java.util.Arrays.fill(surface.y(), Float.NaN);
 		// Only cave slices, and not under a roof, where the light is lifted off the rock above.
 		if (!baker.cave || baker.startY <= baker.limitY || baker.lifted) {
 			return surface;
 		}
+		int[] pixels = new int[size * size];
+		float[] linear = new float[size * size * 4];
+		baker.bakePixels(0, 0, size, size, pixels, null, linear);
 		double unitsPerPixel = 1.0 / Projection.PIXELS_PER_UNIT;
 		float[] lit = new float[3];
+		baker.surfaceOnly = true;
 		for (int py = 0; py < size; py++) {
 			for (int px = 0; px < size; px++) {
-				baker.surfaceOnly = true;
+				int i = py * size + px;
 				baker.surfaceY = Float.NaN;
 				baker.surfaceLight = 0;
 				double u = key.minU() + (px + 0.5) * unitsPerPixel;
 				double v = key.minV() + (py + 0.5) * unitsPerPixel;
-				if (!baker.trace(u, v, 0) || Float.isNaN(baker.surfaceY)) {
+				if (pixels[i] == 0 || !baker.trace(u, v, 0) || Float.isNaN(baker.surfaceY)) {
 					continue;
 				}
-				int i = py * size + px;
 				surface.y()[i] = baker.surfaceY;
 				surface.top()[i] = baker.surfaceTop;
 				surface.light()[i] = baker.surfaceLight;
-				surface.albedo()[i] = srgb(baker.albedoR, baker.albedoG, baker.albedoB);
-				// A light relights what the pixel shows, water and all: the traced pixel with the
+				surface.outlined()[i] = linear[i * 4 + 3] > 0;
+				// A light relights what the pixel shows, water and all: the baked pixel with the
 				// light that lit it taken out.
-				baker.surfaceOnly = false;
-				if (baker.trace(u, v, 0)) {
-					surface.caveLight(i, surface.light()[i] & 15, lit);
-					surface.albedo()[i] = srgb(baker.outR / Math.max(1e-3F, lit[0]), baker.outG / Math.max(1e-3F, lit[1]), baker.outB / Math.max(1e-3F, lit[2]));
-				}
+				surface.caveLight(i, surface.light()[i] & 15, lit);
+				surface.albedo()[i] = pixels[i] & 0xFF000000 | srgb(
+					linear[i * 4] / Math.max(1e-3F, lit[0]), linear[i * 4 + 1] / Math.max(1e-3F, lit[1]), linear[i * 4 + 2] / Math.max(1e-3F, lit[2])
+				);
 			}
 		}
 		return surface;
@@ -436,7 +439,7 @@ public final class TileBaker {
 		if (blocks == null) {
 			int[] pixels = new int[size * size];
 			byte[] info = overlays == null ? null : new byte[size * size];
-			baker.bakePixels(0, 0, size, size, pixels, info);
+			baker.bakePixels(0, 0, size, size, pixels, info, null);
 			merge(pixels, saved, 0, 0, size);
 			return TileImage.full(key, Mipmaps.build(pixels, size), coverage(pixels, size, size), info);
 		}
@@ -447,7 +450,7 @@ public final class TileBaker {
 			int by = i / perRow;
 			int[] pixels = new int[TileImage.BLOCK * TileImage.BLOCK];
 			byte[] info = overlays == null ? null : new byte[TileImage.BLOCK * TileImage.BLOCK];
-			baker.bakePixels(bx * TileImage.BLOCK, by * TileImage.BLOCK, TileImage.BLOCK, TileImage.BLOCK, pixels, info);
+			baker.bakePixels(bx * TileImage.BLOCK, by * TileImage.BLOCK, TileImage.BLOCK, TileImage.BLOCK, pixels, info, null);
 			merge(pixels, saved, bx * TileImage.BLOCK, by * TileImage.BLOCK, TileImage.BLOCK);
 			patches.add(new TileImage.Patch(bx, by, Mipmaps.build(pixels, TileImage.BLOCK), coverage(pixels, TileImage.BLOCK, TileImage.BLOCK), info));
 		}
@@ -473,7 +476,7 @@ public final class TileBaker {
 		baker.fourSamples = true;
 		int size = Projection.TILE_PIXELS;
 		int[] pixels = new int[size * size];
-		baker.bakePixels(0, 0, size, size, pixels, info);
+		baker.bakePixels(0, 0, size, size, pixels, info, null);
 		return pixels;
 	}
 
@@ -507,7 +510,11 @@ public final class TileBaker {
 		}
 	}
 
-	private void bakePixels(int px0, int py0, int width, int height, int[] out, byte @Nullable [] info) {
+	/**
+	 * Traces pixels into {@code out}, and when {@code linear} isn't null, four floats per pixel
+	 * into it: the pixel's colour in linear light before grading, then 1 where an outline darkens it.
+	 */
+	private void bakePixels(int px0, int py0, int width, int height, int[] out, byte @Nullable [] info, float @Nullable [] linear) {
 		if (this.startY <= this.limitY) {
 			return;
 		}
@@ -548,6 +555,14 @@ public final class TileBaker {
 				}
 				if (known > 0) {
 					pixels[y * w + x] = this.abgr(r / known, g / known, b / known, known * 255 / samples.length);
+					int ix = x - border;
+					int iy = y - border;
+					if (linear != null && ix >= 0 && iy >= 0 && ix < width && iy < height) {
+						int i = (iy * width + ix) * 4;
+						linear[i] = r / known;
+						linear[i + 1] = g / known;
+						linear[i + 2] = b / known;
+					}
 				}
 				if (depth != null) {
 					depth[y * w + x] = known > 0 ? d / known : Float.NaN;
@@ -565,6 +580,9 @@ public final class TileBaker {
 				float here = depth[i];
 				if (pixel != 0 && (nearer(depth[i - 1], here) || nearer(depth[i + 1], here) || nearer(depth[i - w], here) || nearer(depth[i + w], here))) {
 					pixel = darken(pixel, keep);
+					if (linear != null) {
+						linear[(y * width + x) * 4 + 3] = 1;
+					}
 				}
 				out[y * width + x] = pixel;
 			}
@@ -611,7 +629,7 @@ public final class TileBaker {
 		return here - neighbour > OUTLINE_DEPTH;
 	}
 
-	private static int darken(int abgr, float keep) {
+	static int darken(int abgr, float keep) {
 		int r = Math.round((abgr & 0xFF) * keep);
 		int g = Math.round(((abgr >> 8) & 0xFF) * keep);
 		int b = Math.round(((abgr >> 16) & 0xFF) * keep);
