@@ -59,6 +59,7 @@ public final class Lights {
 		@Nullable MapTexture texture;
 		int edge;
 		int layer;
+		List<UUID> lights = List.of();
 		int pu0;
 		int pv0;
 		int width;
@@ -118,6 +119,11 @@ public final class Lights {
 			this.close();
 			return;
 		}
+		double ppu = Projection.PIXELS_PER_UNIT;
+		double vu0 = view.minU() * ppu;
+		double vv0 = view.minV() * ppu;
+		double vu1 = vu0 + view.width() / view.zoom() * ppu;
+		double vv1 = vv0 + view.height() / view.zoom() * ppu;
 		List<Held> held = new ArrayList<>();
 		for (Player player : this.level.players()) {
 			int carried = carried(player);
@@ -127,15 +133,15 @@ public final class Lights {
 			Vec3 eye = player.getEyePosition(partialTick);
 			// Held at about shoulder height.
 			int sy = (int) Math.floor(eye.y - 0.5);
-			if (sy <= view.layer()) {
-				held.add(Held.of(player.getUUID(), (int) Math.floor(eye.x), sy, (int) Math.floor(eye.z), carried));
+			if (sy > view.layer()) {
+				continue;
+			}
+			Held light = Held.of(player.getUUID(), (int) Math.floor(eye.x), sy, (int) Math.floor(eye.z), carried);
+			// Only lights that reach into the view, so a group never spans more than the view and their reach.
+			if (light.pu1() > vu0 && light.pu0() < vu1 && light.pv1() > vv0 && light.pv0() < vv1) {
+				held.add(light);
 			}
 		}
-		double ppu = Projection.PIXELS_PER_UNIT;
-		double vu0 = view.minU() * ppu;
-		double vv0 = view.minV() * ppu;
-		double vu1 = vu0 + view.width() / view.zoom() * ppu;
-		double vv1 = vv0 + view.height() / view.zoom() * ppu;
 		MapStyle style = MapStyle.get();
 		Map<UUID, Glow> kept = new HashMap<>();
 		List<Glow> drawn = new ArrayList<>();
@@ -158,12 +164,9 @@ public final class Lights {
 			int pv0 = group.stream().mapToInt(Held::pv0).min().getAsInt();
 			int pu1 = group.stream().mapToInt(Held::pu1).max().getAsInt();
 			int pv1 = group.stream().mapToInt(Held::pv1).max().getAsInt();
-			if (pu1 <= vu0 || pu0 >= vu1 || pv1 <= vv0 || pv0 >= vv1) {
-				continue;
-			}
 			this.make(glow, group, pu0, pv0, pu1, pv1, view.layer(), style);
-			// Not one made for another slice while this one's is made.
-			if (glow.lit && glow.texture != null && glow.layer == view.layer()) {
+			// Not one made for another slice, or with a light no longer shown, while this one's is made.
+			if (glow.lit && glow.texture != null && glow.layer == view.layer() && group.stream().map(Held::id).toList().containsAll(glow.lights)) {
 				drawn.add(glow);
 			}
 		}
@@ -250,7 +253,7 @@ public final class Lights {
 	}
 
 	/** An overlay made: its mips, or null where it lights nothing brighter than the tiles. */
-	private record Made(int layer, int pu0, int pv0, int width, int height, int edge, int @Nullable [][] mips) {
+	private record Made(List<UUID> lights, int layer, int pu0, int pv0, int width, int height, int edge, int @Nullable [][] mips) {
 	}
 
 	private static Made build(VoxelReader reader, SurfaceArea area, List<Held> group, int layer, int pu0, int pv0, int width, int height, MapStyle style) {
@@ -284,6 +287,9 @@ public final class Lights {
 				float light = 0;
 				for (int i = 0; i < levels.length; i++) {
 					Held held = group.get(i);
+					if (pu < held.pu0() || pu >= held.pu1() || pv < held.pv0() || pv >= held.pv1()) {
+						continue;
+					}
 					int reach = held.carried() - 1;
 					int x0 = held.sx() - reach;
 					int y0 = held.sy() - reach;
@@ -299,7 +305,7 @@ public final class Lights {
 				}
 			}
 		}
-		return new Made(layer, pu0, pv0, width, height, edge, lit ? Mipmaps.build(pixels, edge) : null);
+		return new Made(group.stream().map(Held::id).toList(), layer, pu0, pv0, width, height, edge, lit ? Mipmaps.build(pixels, edge) : null);
 	}
 
 	/** Puts a made overlay up in place of the last. Render thread. */
@@ -320,6 +326,7 @@ public final class Lights {
 		}
 		glow.edge = made.edge();
 		glow.layer = made.layer();
+		glow.lights = made.lights();
 		glow.pu0 = made.pu0();
 		glow.pv0 = made.pv0();
 		glow.width = made.width();
