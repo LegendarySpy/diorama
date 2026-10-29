@@ -22,7 +22,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.PriorityQueue;
 import java.util.UUID;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import net.minecraft.client.Minecraft;
@@ -65,7 +67,7 @@ public final class Lights {
 		int width;
 		int height;
 		boolean lit;
-		@Nullable CompletableFuture<@Nullable Made> pending;
+		@Nullable CompletableFuture<Made> pending;
 	}
 
 	/** Makes the overlays, off the render thread. */
@@ -92,19 +94,32 @@ public final class Lights {
 		return stack.getItem() instanceof BlockItem item ? item.getBlock().defaultBlockState().getLightEmission() : 0;
 	}
 
-	/** A light carried at block (sx, sy, sz), and the map pixels (pu0, pv0) to (pu1, pv1) it can light. */
+	/**
+	 * A light carried at block (sx, sy, sz), and the map pixels (pu0, pv0) to (pu1, pv1) it can
+	 * light: a block past the cube it spreads over, where smoothing still carries its last level.
+	 */
 	private record Held(UUID id, int sx, int sy, int sz, int carried, int pu0, int pv0, int pu1, int pv1) {
 		static Held of(UUID id, int sx, int sy, int sz, int carried) {
 			double sin = Projection.sin();
 			double cos = Projection.cos();
 			int ppu = Projection.PIXELS_PER_UNIT;
-			int reach = carried - 1;
-			return new Held(id, sx, sy, sz, carried, (sx - reach) * ppu, (int) Math.floor(((sz - reach) * sin - (sy + reach + 1) * cos) * ppu),
-				(sx + reach + 1) * ppu, (int) Math.ceil(((sz + reach + 1) * sin - (sy - reach) * cos) * ppu));
+			return new Held(id, sx, sy, sz, carried, (sx - carried) * ppu, (int) Math.floor(((sz - carried) * sin - (sy + carried + 1) * cos) * ppu),
+				(sx + carried + 1) * ppu, (int) Math.ceil(((sz + carried + 1) * sin - (sy - carried) * cos) * ppu));
 		}
 
 		boolean touches(Held other) {
 			return this.pu0 < other.pu1 && other.pu0 < this.pu1 && this.pv0 < other.pv1 && other.pv0 < this.pv1;
+		}
+	}
+
+	/** Map pixels (pu0, pv0) to (pu1, pv1). */
+	private record Bounds(int pu0, int pv0, int pu1, int pv1) {
+		boolean touches(int pu0, int pv0, int pu1, int pv1) {
+			return this.pu0 < pu1 && pu0 < this.pu1 && this.pv0 < pv1 && pv0 < this.pv1;
+		}
+
+		boolean contains(int pu, int pv) {
+			return pu >= this.pu0 && pu < this.pu1 && pv >= this.pv0 && pv < this.pv1;
 		}
 	}
 
@@ -147,6 +162,7 @@ public final class Lights {
 		List<Glow> drawn = new ArrayList<>();
 		// In id order, so the groups come out the same every frame.
 		held.sort(Comparator.comparing(Held::id));
+		List<Bounds> before = new ArrayList<>();
 		for (List<Held> group : groups(held)) {
 			// Each group keeps the overlay one of its lights had, so it stays up until the next is made.
 			Glow glow = null;
@@ -166,9 +182,12 @@ public final class Lights {
 			int pv0 = group.stream().mapToInt(Held::pv0).min().getAsInt();
 			int pu1 = group.stream().mapToInt(Held::pu1).max().getAsInt();
 			int pv1 = group.stream().mapToInt(Held::pv1).max().getAsInt();
-			// Every light that reaches the overlay, so where groups split at MAX_SPAN meet they still agree.
+			// Every light that reaches the overlay, but only pixels no earlier group's overlay has, so
+			// groups split at MAX_SPAN meet without a seam or a pixel drawn twice.
 			List<Held> lights = held.stream().filter(light -> light.pu0() < pu1 && pu0 < light.pu1() && light.pv0() < pv1 && pv0 < light.pv1()).toList();
-			this.make(glow, lights, pu0, pv0, pu1, pv1, view.layer(), style);
+			List<Bounds> taken = before.stream().filter(b -> b.touches(pu0, pv0, pu1, pv1)).toList();
+			before.add(new Bounds(pu0, pv0, pu1, pv1));
+			this.make(glow, lights, taken, pu0, pv0, pu1, pv1, view.layer(), style);
 			// Not one made for another slice, or with a light no longer shown, while this one's is made.
 			if (glow.lit && glow.texture != null && glow.layer == view.layer() && lights.stream().map(Held::id).toList().containsAll(glow.lights)) {
 				drawn.add(glow);
@@ -252,38 +271,39 @@ public final class Lights {
 	 * ground under them is better known: the pixels they light brighter than their tile shows.
 	 * Made on the light thread; the last one made stays up until the next is ready.
 	 */
-	private void make(Glow glow, List<Held> lights, int pu0, int pv0, int pu1, int pv1, int layer, MapStyle style) {
+	private void make(Glow glow, List<Held> lights, List<Bounds> taken, int pu0, int pv0, int pu1, int pv1, int layer, MapStyle style) {
 		if (glow.pending != null) {
 			if (!glow.pending.isDone()) {
 				return;
 			}
-			Made made = glow.pending.join();
+			CompletableFuture<Made> pending = glow.pending;
 			glow.pending = null;
-			if (made != null) {
-				show(glow, made);
+			try {
+				show(glow, pending.join());
+			} catch (CompletionException | CancellationException e) {
+				Diorama.LOGGER.warn("Couldn't light the map around a held light", e);
 			}
 		}
 		SurfaceArea area = this.map.surfaces(layer, pu0, pv0, pu1, pv1);
-		List<Object> key = List.of(lights, layer, style, Projection.sin(), java.util.Arrays.asList(area.tiles()));
+		// Read once here, so the overlay's bounds and what it lights agree.
+		double sin = Projection.sin();
+		double cos = Projection.cos();
+		List<Object> key = List.of(lights, taken, layer, style, sin, cos, java.util.Arrays.asList(area.tiles()));
 		if (key.equals(glow.madeFor)) {
 			return;
 		}
 		glow.madeFor = key;
 		VoxelReader reader = new VoxelReader(this.map, BlockLooks.get());
-		glow.pending = CompletableFuture.supplyAsync(() -> build(reader, area, lights, layer, pu0, pv0, pu1 - pu0, pv1 - pv0, style), WORKER)
-			.exceptionally(e -> {
-				Diorama.LOGGER.warn("Couldn't light the map around a held light", e);
-				return null;
-			});
+		glow.pending = CompletableFuture.supplyAsync(() -> build(reader, area, lights, taken, layer, pu0, pv0, pu1 - pu0, pv1 - pv0, style, sin, cos), WORKER);
 	}
 
 	/** An overlay made: its mips, or null where it lights nothing brighter than the tiles. */
 	private record Made(List<UUID> lights, int layer, int pu0, int pv0, int width, int height, int edge, int @Nullable [][] mips) {
 	}
 
-	private static Made build(VoxelReader reader, SurfaceArea area, List<Held> lights, int layer, int pu0, int pv0, int width, int height, MapStyle style) {
-		double sin = Projection.sin();
-		double cos = Projection.cos();
+	private static Made build(
+		VoxelReader reader, SurfaceArea area, List<Held> lights, List<Bounds> taken, int layer, int pu0, int pv0, int width, int height, MapStyle style, double sin, double cos
+	) {
 		int ppu = Projection.PIXELS_PER_UNIT;
 		float[][] levels = new float[lights.size()][];
 		for (int i = 0; i < levels.length; i++) {
@@ -300,7 +320,7 @@ public final class Lights {
 				int pu = pu0 + px;
 				int pv = pv0 + py;
 				float y = area.y(pu, pv);
-				if (Float.isNaN(y)) {
+				if (Float.isNaN(y) || taken(taken, pu, pv)) {
 					continue;
 				}
 				// Half a block out from the surface the camera sees here, into the open space in
@@ -331,6 +351,15 @@ public final class Lights {
 			}
 		}
 		return new Made(lights.stream().map(Held::id).toList(), layer, pu0, pv0, width, height, edge, lit ? Mipmaps.build(pixels, edge) : null);
+	}
+
+	private static boolean taken(List<Bounds> taken, int pu, int pv) {
+		for (Bounds bounds : taken) {
+			if (bounds.contains(pu, pv)) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/** Puts a made overlay up in place of the last. Render thread. */
@@ -471,7 +500,14 @@ public final class Lights {
 	}
 
 	private static void drop(@Nullable Glow glow) {
-		if (glow != null && glow.texture != null) {
+		if (glow == null) {
+			return;
+		}
+		if (glow.pending != null) {
+			// A build not started yet is skipped.
+			glow.pending.cancel(false);
+		}
+		if (glow.texture != null) {
 			glow.texture.close();
 		}
 	}
