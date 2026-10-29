@@ -131,6 +131,7 @@ public final class TileBaker {
 	private final MapStyle style;
 	private final Lighting lighting;
 	private final float[] light = new float[3];
+	private final float[] unlit = new float[3];
 	// The camera angle when this bake started; a change mid-bake makes the result stale anyway.
 	private final double sin;
 	private final double cos;
@@ -329,7 +330,6 @@ public final class TileBaker {
 		float[] linear = new float[size * size * 4];
 		baker.bakePixels(0, 0, size, size, pixels, null, linear);
 		double unitsPerPixel = 1.0 / Projection.PIXELS_PER_UNIT;
-		float[] lit = new float[3];
 		baker.surfaceOnly = true;
 		for (int py = 0; py < size; py++) {
 			for (int px = 0; px < size; px++) {
@@ -347,10 +347,7 @@ public final class TileBaker {
 				surface.outlined()[i] = linear[i * 4 + 3] > 0;
 				// A light relights what the pixel shows, water and all: the baked pixel with the
 				// light that lit it taken out.
-				surface.caveLight(i, surface.light()[i] & 15, lit);
-				surface.albedo()[i] = pixels[i] & 0xFF000000 | srgb(
-					linear[i * 4] / Math.max(1e-3F, lit[0]), linear[i * 4 + 1] / Math.max(1e-3F, lit[1]), linear[i * 4 + 2] / Math.max(1e-3F, lit[2])
-				);
+				surface.albedo()[i] = pixels[i] & 0xFF000000 | srgb(linear[i * 4], linear[i * 4 + 1], linear[i * 4 + 2]);
 			}
 		}
 		return surface;
@@ -366,12 +363,17 @@ public final class TileBaker {
 	/** Records a surface-only trace landing on water at height {@code y}. */
 	private void landedOnWater(int waterId, int x, int bz, double y, double z) {
 		this.albedo(waterId, x, bz, true);
+		this.surfaceLight = this.waterLight(x, y, z);
+		this.surfaceY = (float) y;
+		this.surfaceTop = true;
+	}
+
+	/** What lights water whose surface is at (x, y, z) in a cave slice; see {@link TileSurface#caveLight}. */
+	private int waterLight(int x, double y, double z) {
 		int above = (int) Math.floor(y);
 		int cz = (int) Math.floor(z);
 		float fade = 1 - Math.min(0.5F, (float) (this.startY - y) / 60.0F);
-		this.surfaceLight = TileSurface.caveLight(this.reader.blockLight(x, above, cz), this.reader.skyLight(x, above, cz), 1, fade, 0);
-		this.surfaceY = (float) y;
-		this.surfaceTop = true;
+		return TileSurface.caveLight(this.reader.blockLight(x, above, cz), this.reader.skyLight(x, above, cz), 1, fade, 0);
 	}
 
 	private static int srgb(float r, float g, float b) {
@@ -512,7 +514,8 @@ public final class TileBaker {
 
 	/**
 	 * Traces pixels into {@code out}, and when {@code linear} isn't null, four floats per pixel
-	 * into it: the pixel's colour in linear light before grading, then 1 where an outline darkens it.
+	 * into it: the pixel's colour in linear light with each sample's own cave light taken out
+	 * (all but a side's darkening), then 1 where an outline darkens it.
 	 */
 	private void bakePixels(int px0, int py0, int width, int height, int[] out, byte @Nullable [] info, float @Nullable [] linear) {
 		if (this.startY <= this.limitY) {
@@ -534,11 +537,28 @@ public final class TileBaker {
 				float g = 0;
 				float b = 0;
 				float d = 0;
+				float ur = 0;
+				float ug = 0;
+				float ub = 0;
 				int known = 0;
 				for (int s = 0; s < samples.length; s++) {
 					double u = minU + (px0 + x - border + samples[s][0]) * unitsPerPixel;
 					double v = minV + (py0 + y - border + samples[s][1]) * unitsPerPixel;
+					this.surfaceLight = -1;
 					if (this.trace(u, v, s)) {
+						if (linear != null) {
+							// Samples on faces lit differently are each unlit by their own light; ones
+							// lit by none of it, like the cut face, are kept as they are.
+							float[] lit = this.unlit;
+							if (this.surfaceLight == -1) {
+								java.util.Arrays.fill(lit, 1);
+							} else {
+								TileSurface.caveLightOf(this.surfaceLight, this.surfaceLight & 15, lit);
+							}
+							ur += this.outR / Math.max(1e-3F, lit[0]);
+							ug += this.outG / Math.max(1e-3F, lit[1]);
+							ub += this.outB / Math.max(1e-3F, lit[2]);
+						}
 						if (s == 0 && info != null && this.hitSolid) {
 							int ix = x - border;
 							int iy = y - border;
@@ -559,9 +579,9 @@ public final class TileBaker {
 					int iy = y - border;
 					if (linear != null && ix >= 0 && iy >= 0 && ix < width && iy < height) {
 						int i = (iy * width + ix) * 4;
-						linear[i] = r / known;
-						linear[i + 1] = g / known;
-						linear[i + 2] = b / known;
+						linear[i] = ur / known;
+						linear[i + 1] = ug / known;
+						linear[i + 2] = ub / known;
 					}
 				}
 				if (depth != null) {
@@ -760,6 +780,10 @@ public final class TileBaker {
 					}
 					if (waterId >= 0) {
 						this.mixWater(waterId, x, waterBy, waterBz, u, z0, waterT, t, sample);
+						if (this.cave) {
+							// Lit as water, as a surface trace records it.
+							this.surfaceLight = this.waterLight(x, y0 - waterT * sin, z0 - waterT * cos);
+						}
 					}
 					return true;
 				}
@@ -819,6 +843,9 @@ public final class TileBaker {
 			this.outG = 0;
 			this.outB = 0;
 			this.mixWater(waterId, x, waterBy, waterBz, u, z0, waterT, waterT + 64, sample);
+			if (this.cave) {
+				this.surfaceLight = this.waterLight(x, y0 - waterT * sin, z0 - waterT * cos);
+			}
 		} else {
 			this.outR = 0.01F;
 			this.outG = 0.01F;

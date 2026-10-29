@@ -7,10 +7,10 @@ package dev.diorama.bake;
  *
  * <p>Per pixel: {@code y} is the ground's world y (its x is the pixel's u, and its z follows from
  * u, v and y), NaN where the map knows nothing; {@code top} whether it's a top face (else a south
- * one); {@code albedo} the pixel as drawn with its light taken out, in sRGB as 0xAARRGGBB with the
- * pixel's alpha, so water keeps its depth and edges their coverage; {@code light}, what lit it
- * there ({@link #caveLight}), so a moving light can light it again; and {@code outlined}, whether
- * the style's outline darkens it.
+ * one); {@code albedo} the pixel as drawn with its light taken out but a side's darkening kept,
+ * in sRGB as 0xAARRGGBB with the pixel's alpha, so water keeps its depth and edges their
+ * coverage; {@code light}, what lit it there ({@link #caveLight}), so a moving light can light it
+ * again; and {@code outlined}, whether the style's outline darkens it.
  */
 public record TileSurface(int revision, float[] y, boolean[] top, int[] albedo, int[] light, boolean[] outlined) {
 	/**
@@ -23,12 +23,18 @@ public record TileSurface(int revision, float[] y, boolean[] top, int[] albedo, 
 
 	/**
 	 * The light on the surface at pixel index {@code i} of a cave slice, lit as the tile was but
-	 * with block light {@code blockLight}, in linear light; see {@link Lighting#cave}.
+	 * with block light {@code blockLight}, in linear light; see {@link #caveLightOf}.
 	 */
 	void caveLight(int i, float blockLight, float[] out) {
-		int packed = this.light[i];
-		Lighting.cave(blockLight, packed >> 4 & 15, (packed >> 12 & 255) / 255.0F, (packed >> 20 & 255) / 255.0F,
-			(packed >> 8 & 15) / 15.0F, this.top[i] ? 1 : TileBaker.SIDE, out);
+		caveLightOf(this.light[i], blockLight, out);
+	}
+
+	/**
+	 * The light {@code packed} ({@link #caveLight}) gives with block light {@code blockLight},
+	 * without a side's darkening, in linear light; see {@link Lighting#cave}.
+	 */
+	static void caveLightOf(int packed, float blockLight, float[] out) {
+		Lighting.cave(blockLight, packed >> 4 & 15, (packed >> 12 & 255) / 255.0F, (packed >> 20 & 255) / 255.0F, (packed >> 8 & 15) / 15.0F, 1, out);
 	}
 
 }
