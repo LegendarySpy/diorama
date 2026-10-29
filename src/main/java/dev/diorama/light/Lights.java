@@ -145,6 +145,8 @@ public final class Lights {
 		MapStyle style = MapStyle.get();
 		Map<UUID, Glow> kept = new HashMap<>();
 		List<Glow> drawn = new ArrayList<>();
+		// In id order, so the groups come out the same every frame.
+		held.sort(Comparator.comparing(Held::id));
 		for (List<Held> group : groups(held)) {
 			// Each group keeps the overlay one of its lights had, so it stays up until the next is made.
 			Glow glow = null;
@@ -164,9 +166,11 @@ public final class Lights {
 			int pv0 = group.stream().mapToInt(Held::pv0).min().getAsInt();
 			int pu1 = group.stream().mapToInt(Held::pu1).max().getAsInt();
 			int pv1 = group.stream().mapToInt(Held::pv1).max().getAsInt();
-			this.make(glow, group, pu0, pv0, pu1, pv1, view.layer(), style);
+			// Every light that reaches the overlay, so where groups split at MAX_SPAN meet they still agree.
+			List<Held> lights = held.stream().filter(light -> light.pu0() < pu1 && pu0 < light.pu1() && light.pv0() < pv1 && pv0 < light.pv1()).toList();
+			this.make(glow, lights, pu0, pv0, pu1, pv1, view.layer(), style);
 			// Not one made for another slice, or with a light no longer shown, while this one's is made.
-			if (glow.lit && glow.texture != null && glow.layer == view.layer() && group.stream().map(Held::id).toList().containsAll(glow.lights)) {
+			if (glow.lit && glow.texture != null && glow.layer == view.layer() && lights.stream().map(Held::id).toList().containsAll(glow.lights)) {
 				drawn.add(glow);
 			}
 		}
@@ -203,7 +207,8 @@ public final class Lights {
 
 	/**
 	 * The lights in groups whose patches touch, each made as one overlay so that where they cross
-	 * the brighter one shows, whatever order they're drawn in. Each group is in id order.
+	 * the brighter one shows, whatever order they're drawn in, up to {@link #MAX_SPAN} across.
+	 * Each group is in id order.
 	 */
 	private static List<List<Held>> groups(List<Held> held) {
 		List<List<Held>> groups = new ArrayList<>();
@@ -211,7 +216,7 @@ public final class Lights {
 			List<Held> joined = new ArrayList<>(List.of(light));
 			for (Iterator<List<Held>> it = groups.iterator(); it.hasNext(); ) {
 				List<Held> group = it.next();
-				if (group.stream().anyMatch(light::touches)) {
+				if (group.stream().anyMatch(light::touches) && span(joined, group) <= MAX_SPAN) {
 					joined.addAll(group);
 					it.remove();
 				}
@@ -222,12 +227,32 @@ public final class Lights {
 		return groups;
 	}
 
+	/** The widest a group's overlay gets, in map pixels; a chain of lights longer than this is drawn in more than one. */
+	private static final int MAX_SPAN = 512;
+
+	/** How wide or tall, whichever is more, an overlay for both groups of lights would be. */
+	private static int span(List<Held> a, List<Held> b) {
+		int pu0 = Integer.MAX_VALUE;
+		int pv0 = Integer.MAX_VALUE;
+		int pu1 = Integer.MIN_VALUE;
+		int pv1 = Integer.MIN_VALUE;
+		for (List<Held> group : List.of(a, b)) {
+			for (Held light : group) {
+				pu0 = Math.min(pu0, light.pu0());
+				pv0 = Math.min(pv0, light.pv0());
+				pu1 = Math.max(pu1, light.pu1());
+				pv1 = Math.max(pv1, light.pv1());
+			}
+		}
+		return Math.max(pu1 - pu0, pv1 - pv0);
+	}
+
 	/**
 	 * Makes a group's overlay again if a light moved to another block, changed strength, or the
 	 * ground under them is better known: the pixels they light brighter than their tile shows.
 	 * Made on the light thread; the last one made stays up until the next is ready.
 	 */
-	private void make(Glow glow, List<Held> group, int pu0, int pv0, int pu1, int pv1, int layer, MapStyle style) {
+	private void make(Glow glow, List<Held> lights, int pu0, int pv0, int pu1, int pv1, int layer, MapStyle style) {
 		if (glow.pending != null) {
 			if (!glow.pending.isDone()) {
 				return;
@@ -239,13 +264,13 @@ public final class Lights {
 			}
 		}
 		SurfaceArea area = this.map.surfaces(layer, pu0, pv0, pu1, pv1);
-		List<Object> key = List.of(group, layer, style, Projection.sin(), java.util.Arrays.asList(area.tiles()));
+		List<Object> key = List.of(lights, layer, style, Projection.sin(), java.util.Arrays.asList(area.tiles()));
 		if (key.equals(glow.madeFor)) {
 			return;
 		}
 		glow.madeFor = key;
 		VoxelReader reader = new VoxelReader(this.map, BlockLooks.get());
-		glow.pending = CompletableFuture.supplyAsync(() -> build(reader, area, group, layer, pu0, pv0, pu1 - pu0, pv1 - pv0, style), WORKER)
+		glow.pending = CompletableFuture.supplyAsync(() -> build(reader, area, lights, layer, pu0, pv0, pu1 - pu0, pv1 - pv0, style), WORKER)
 			.exceptionally(e -> {
 				Diorama.LOGGER.warn("Couldn't light the map around a held light", e);
 				return null;
@@ -256,13 +281,13 @@ public final class Lights {
 	private record Made(List<UUID> lights, int layer, int pu0, int pv0, int width, int height, int edge, int @Nullable [][] mips) {
 	}
 
-	private static Made build(VoxelReader reader, SurfaceArea area, List<Held> group, int layer, int pu0, int pv0, int width, int height, MapStyle style) {
+	private static Made build(VoxelReader reader, SurfaceArea area, List<Held> lights, int layer, int pu0, int pv0, int width, int height, MapStyle style) {
 		double sin = Projection.sin();
 		double cos = Projection.cos();
 		int ppu = Projection.PIXELS_PER_UNIT;
-		float[][] levels = new float[group.size()][];
+		float[][] levels = new float[lights.size()][];
 		for (int i = 0; i < levels.length; i++) {
-			Held light = group.get(i);
+			Held light = lights.get(i);
 			levels[i] = spread(reader, light.sx(), light.sy(), light.sz(), light.carried(), light.carried() - 1, 2 * light.carried() - 1);
 		}
 		int step = 1 << (Mipmaps.LEVELS - 1);
@@ -286,7 +311,7 @@ public final class Lights {
 				double wz = ((pv + 0.5) / ppu + y * cos) / sin + (top ? 0 : 0.5);
 				float light = 0;
 				for (int i = 0; i < levels.length; i++) {
-					Held held = group.get(i);
+					Held held = lights.get(i);
 					if (pu < held.pu0() || pu >= held.pu1() || pv < held.pv0() || pv >= held.pv1()) {
 						continue;
 					}
@@ -305,7 +330,7 @@ public final class Lights {
 				}
 			}
 		}
-		return new Made(group.stream().map(Held::id).toList(), layer, pu0, pv0, width, height, edge, lit ? Mipmaps.build(pixels, edge) : null);
+		return new Made(lights.stream().map(Held::id).toList(), layer, pu0, pv0, width, height, edge, lit ? Mipmaps.build(pixels, edge) : null);
 	}
 
 	/** Puts a made overlay up in place of the last. Render thread. */
