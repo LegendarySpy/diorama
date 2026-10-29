@@ -62,12 +62,24 @@ public final class Lights {
 		int edge;
 		int layer;
 		List<UUID> lights = List.of();
+		List<Bounds> taken = List.of();
 		int pu0;
 		int pv0;
 		int width;
 		int height;
 		boolean lit;
 		@Nullable CompletableFuture<Made> pending;
+
+		Bounds bounds() {
+			return new Bounds(this.pu0, this.pv0, this.pu0 + this.width, this.pv0 + this.height);
+		}
+
+		/** Whether this and {@code other} share no pixels, one having left out the other's. */
+		boolean apart(Glow other) {
+			Bounds a = this.bounds();
+			Bounds b = other.bounds();
+			return !a.touches(b.pu0(), b.pv0(), b.pu1(), b.pv1()) || this.taken.contains(b) || other.taken.contains(a);
+		}
 	}
 
 	/** Makes the overlays, off the render thread. */
@@ -190,7 +202,11 @@ public final class Lights {
 			this.make(glow, lights, taken, pu0, pv0, pu1, pv1, view.layer(), style);
 			// Not one made for another slice, or with a light no longer shown, while this one's is made.
 			if (glow.lit && glow.texture != null && glow.layer == view.layer() && lights.stream().map(Held::id).toList().containsAll(glow.lights)) {
-				drawn.add(glow);
+				Glow made = glow;
+				// One still being remade after its group split differently can overlap another; left out until it's made.
+				if (drawn.stream().allMatch(made::apart)) {
+					drawn.add(glow);
+				}
 			}
 		}
 		this.glows.values().forEach(Lights::drop);
@@ -298,7 +314,7 @@ public final class Lights {
 	}
 
 	/** An overlay made: its mips, or null where it lights nothing brighter than the tiles. */
-	private record Made(List<UUID> lights, int layer, int pu0, int pv0, int width, int height, int edge, int @Nullable [][] mips) {
+	private record Made(List<UUID> lights, List<Bounds> taken, int layer, int pu0, int pv0, int width, int height, int edge, int @Nullable [][] mips) {
 	}
 
 	private static Made build(
@@ -350,7 +366,7 @@ public final class Lights {
 				}
 			}
 		}
-		return new Made(lights.stream().map(Held::id).toList(), layer, pu0, pv0, width, height, edge, lit ? Mipmaps.build(pixels, edge) : null);
+		return new Made(lights.stream().map(Held::id).toList(), taken, layer, pu0, pv0, width, height, edge, lit ? Mipmaps.build(pixels, edge) : null);
 	}
 
 	private static boolean taken(List<Bounds> taken, int pu, int pv) {
@@ -381,6 +397,7 @@ public final class Lights {
 		glow.edge = made.edge();
 		glow.layer = made.layer();
 		glow.lights = made.lights();
+		glow.taken = made.taken();
 		glow.pu0 = made.pu0();
 		glow.pv0 = made.pv0();
 		glow.width = made.width();
