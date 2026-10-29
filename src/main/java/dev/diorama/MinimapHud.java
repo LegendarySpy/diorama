@@ -1,22 +1,29 @@
 package dev.diorama;
 
 import dev.diorama.bake.TileKey;
+import dev.diorama.compat.Cobblemon;
 import dev.diorama.render.Circle;
 import dev.diorama.render.MapLevel;
 import dev.diorama.render.MapViewport;
+import dev.diorama.drawing.DrawingOverlay;
+import dev.diorama.drawing.DrawingStore;
 import dev.diorama.render.Markers;
 import dev.diorama.render.Radar;
 import dev.diorama.render.gpu.MapCanvas;
+import dev.diorama.waypoint.Waypoint;
 import dev.diorama.waypoint.WaypointOverlay;
 import dev.diorama.waypoint.WaypointStore;
 import java.util.ArrayList;
 import java.util.List;
 import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElement;
+//? if >=1.21 {
 import net.minecraft.client.DeltaTracker;
+//?}
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
-import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
+import net.minecraft.client.gui.screens.ChatScreen;
+import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
@@ -39,6 +46,7 @@ public final class MinimapHud implements HudElement {
 	private static final long LAYER_HOLD_MS = 3000;
 
 	private final MapViewport viewport = new MapViewport();
+	private final DrawingOverlay drawings = new DrawingOverlay();
 	/** The slice on screen. Moving into another slice keeps this one until the next has baked. */
 	private int shownLayer;
 	private boolean showing;
@@ -46,19 +54,27 @@ public final class MinimapHud implements HudElement {
 	private long holdStart = -1;
 
 	@Override
+	//? if >=1.21 {
 	public void extractRenderState(GuiGraphicsExtractor graphics, DeltaTracker deltaTracker) {
+		float partialTick = deltaTracker.getGameTimeDeltaPartialTick(true);
+	//?} else {
+	/*public void extractRenderState(GuiGraphicsExtractor graphics, float partialTick) {
+	*///?}
 		Minecraft mc = Minecraft.getInstance();
 		Settings settings = Settings.get();
+		Screen screen = mc.gui.screen();
 		//? if >=26.2 {
 		if (!settings.minimap || mc.gui.hud.isHidden()
 		//?} else {
 		/*if (!settings.minimap || mc.options.hideGui
 		*///?}
-			|| mc.gui.screen() instanceof MapScreen || mc.gui.screen() instanceof AbstractContainerScreen<?>
-			|| mc.gui.screen() instanceof SettingsScreen || debugScreenOpen(mc) || !this.canDraw(mc)) {
-			// Not drawn. Inventories and chests count, because the item lists other mods (JEI, REI,
-			// EMI) put beside them run into the minimap's corner. The settings screen draws its own
-			// copy, sharp over the blur, as a preview. The F3 screen fills both top corners with text
+			|| screen != null && !(screen instanceof ChatScreen) || Cobblemon.inBattle()
+			|| debugScreenOpen(mc) || !this.canDraw(mc)) {
+			// Not drawn under any screen but chat, the way Xaero's Minimap and JourneyMap do it:
+			// screens fill the middle and other mods put theirs in the corners too, like the item
+			// lists JEI, REI and EMI put beside inventories. The settings screen draws its own copy,
+			// sharp over the blur, as a preview. A Cobblemon battle keeps its tiles in both top
+			// corners even with its screen closed. The F3 screen fills both top corners with text
 			// people open it to read.
 			// A hold picks up afresh when it's drawn again, rather than having run out meanwhile.
 			this.holdStart = -1;
@@ -67,7 +83,9 @@ public final class MinimapHud implements HudElement {
 		Settings.Corner corner = settings.minimapCorner;
 		boolean right = corner == Settings.Corner.TOP_RIGHT || corner == Settings.Corner.BOTTOM_RIGHT;
 		boolean top = corner == Settings.Corner.TOP_RIGHT || corner == Settings.Corner.TOP_LEFT;
-		this.draw(graphics, deltaTracker.getGameTimeDeltaPartialTick(true), right, top, top ? this.effectRows(mc.player, right) : 0);
+		// Held, the enlarge key shows it bigger, in the same corner.
+		int size = DioramaClient.ENLARGE_MINIMAP.isDown() ? Math.round(settings.minimapSize * settings.minimapEnlarged / 100.0F) : settings.minimapSize;
+		this.draw(graphics, partialTick, right, top, top ? this.effectRows(mc.player, right) : 0, size);
 	}
 
 	/**
@@ -82,7 +100,7 @@ public final class MinimapHud implements HudElement {
 		}
 		Settings settings = Settings.get();
 		boolean top = settings.minimapCorner == Settings.Corner.TOP_RIGHT || settings.minimapCorner == Settings.Corner.TOP_LEFT;
-		int[] bounds = this.draw(graphics, partialTick, true, top, 0);
+		int[] bounds = this.draw(graphics, partialTick, true, top, 0, settings.minimapSize);
 		if (!settings.minimap) {
 			//? if <1.21.6 {
 			/*// Text sits a little above 0 and the GUI depth-tests, so lift the dimming over it.
@@ -117,8 +135,10 @@ public final class MinimapHud implements HudElement {
 	private static boolean debugScreenOpen(Minecraft mc) {
 		//? if >=1.21.9 {
 		return mc.debugEntries.isOverlayVisible();
-		//?} else {
+		//?} else if >=1.21 {
 		/*return mc.getDebugOverlay().showDebugScreen();
+		*///?} else {
+		/*return mc.options.renderDebug;
 		*///?}
 	}
 
@@ -127,10 +147,10 @@ public final class MinimapHud implements HudElement {
 	}
 
 	/**
-	 * Draws the minimap in a corner, {@code effects} pixels lower for status effect icons. Returns
-	 * what it covers, x0, y0, x1, y1, then the map's own x, y and size.
+	 * Draws the minimap {@code wanted} pixels wide or less, in a corner, {@code effects} pixels lower
+	 * for status effect icons. Returns what it covers, x0, y0, x1, y1, then the map's own x, y and size.
 	 */
-	private int[] draw(GuiGraphicsExtractor graphics, float partialTick, boolean right, boolean top, int effects) {
+	private int[] draw(GuiGraphicsExtractor graphics, float partialTick, boolean right, boolean top, int effects, int wanted) {
 		Minecraft mc = Minecraft.getInstance();
 		MapSession session = MapSession.get();
 		LocalPlayer player = mc.player;
@@ -139,25 +159,34 @@ public final class MinimapHud implements HudElement {
 		Font font = mc.font;
 		List<String> info = this.infoLines(settings, player, mc);
 		int infoHeight = info.size() * 10;
-		int size = this.fit(settings.minimapSize, graphics.guiWidth(), graphics.guiHeight(), top, effects, infoHeight);
+		int size = this.fit(wanted, graphics.guiWidth(), graphics.guiHeight(), top, effects, infoHeight);
 		int x = right ? graphics.guiWidth() - size - MARGIN : MARGIN;
 		int y = top ? MARGIN + effects : graphics.guiHeight() - size - MARGIN - infoHeight;
 		int wantedLayer = settings.autoCaves ? session.autoLayer(player) : TileKey.SURFACE;
 		int layer = this.layerToShow(session.map(), new MapViewport.View(x, y, size, size, pos.x, Projection.v(pos.y, pos.z), settings.zoom(), wantedLayer));
 		boolean round = settings.minimapShape == Settings.Shape.ROUND;
+		float opacity = settings.opacity();
+		this.viewport.opacity(opacity);
+		// A frame that fills the whole minimap is a backdrop the map would show through; a see-through map gets just the border.
+		boolean borderOnly = opacity < 1;
 
 		if (round) {
-			this.roundFrame(graphics, settings.minimapFrame, x, y, size);
+			this.roundFrame(graphics, settings.minimapFrame, x, y, size, borderOnly);
 		} else {
-			this.frame(graphics, settings.minimapFrame, x, y, size);
+			this.frame(graphics, settings.minimapFrame, x, y, size, borderOnly);
 		}
 		MapViewport.View view = new MapViewport.View(x, y, size, size, pos.x, Projection.v(pos.y, pos.z), settings.zoom(), layer, round);
-		this.viewport.draw(graphics, session.map(), view);
-		List<Radar.Blip> blips = ServerRules.radarAllowed() ? Radar.collect(view, partialTick, false) : List.of();
+		this.viewport.draw(graphics, session.map(), view, 0, Settings.get().claims == Settings.ClaimsShown.ALWAYS);
+		DrawingStore drawings = DrawingStore.get();
+		if (drawings != null && settings.drawings == Settings.DrawingsShown.ALWAYS) {
+			this.drawings.draw(graphics, font, view, drawings.in(mc.level.dimension().identifier().toString()), null, null, false);
+		}
+		List<Radar.Blip> blips = ServerRules.radarAllowed() && settings.radarOnMinimap ? Radar.collect(view, partialTick, false) : List.of();
 		Radar.draw(graphics, view, blips, false, false);
 		WaypointStore store = WaypointStore.get();
 		if (store != null && settings.waypointsOnMap) {
-			WaypointOverlay.draw(graphics, view, WaypointOverlay.layout(view, store.in(mc.level.dimension().identifier().toString()), false), false, null);
+			List<Waypoint> near = store.in(mc.level.dimension().identifier().toString()).stream().filter(w -> WaypointStore.isNear(w, player)).toList();
+			WaypointOverlay.draw(graphics, view, WaypointOverlay.layout(view, near, false), false, null);
 		}
 		Radar.draw(graphics, view, blips, false, true);
 		Markers.player(graphics, x + size / 2.0F, y + size / 2.0F, player.getViewYRot(partialTick), 5);
@@ -212,6 +241,8 @@ public final class MinimapHud implements HudElement {
 		int fitted = size;
 		if (top) {
 			fitted = Math.min(fitted, height - MARGIN - effects - infoHeight - MARGIN - 4);
+			// Enlarged on a tall, narrow window, it would otherwise reach past the far side.
+			fitted = Math.min(fitted, width - 2 * MARGIN - 4);
 		} else {
 			fitted = Math.min(fitted, width / 2 - HOTBAR_HALF_WIDTH - 2 * MARGIN - 4);
 			fitted = Math.min(fitted, height - infoHeight - 2 * MARGIN);
@@ -223,18 +254,32 @@ public final class MinimapHud implements HudElement {
 	 * The border around the map: the classic dark frame with a faint light line inside it, or the
 	 * Minecraft edge, a black line with its corner pixels cut and a light grey line inside it.
 	 */
-	private void frame(GuiGraphicsExtractor graphics, Settings.Frame frame, int x, int y, int size) {
+	private void frame(GuiGraphicsExtractor graphics, Settings.Frame frame, int x, int y, int size, boolean borderOnly) {
 		int x1 = x + size;
 		int y1 = y + size;
 		switch (frame) {
 			case CLASSIC -> {
-				graphics.fill(x - 2, y - 2, x1 + 2, y1 + 2, 0xC0101418);
-				graphics.fill(x - 1, y - 1, x1 + 1, y1 + 1, 0x60FFFFFF);
+				if (borderOnly) {
+					border(graphics, x - 2, y - 2, x1 + 2, y1 + 2, 2, 0xC0101418);
+					border(graphics, x - 1, y - 1, x1 + 1, y1 + 1, 1, 0x60FFFFFF);
+				} else {
+					graphics.fill(x - 2, y - 2, x1 + 2, y1 + 2, 0xC0101418);
+					graphics.fill(x - 1, y - 1, x1 + 1, y1 + 1, 0x60FFFFFF);
+				}
 			}
 			case MINECRAFT -> {
-				graphics.fill(x - 2, y - 1, x1 + 2, y1 + 1, 0xFF000000);
-				graphics.fill(x - 1, y - 2, x1 + 1, y1 + 2, 0xFF000000);
-				graphics.fill(x - 1, y - 1, x1 + 1, y1 + 1, 0xFFA0A0A0);
+				if (borderOnly) {
+					// The same black edge with its corner pixels cut, then the grey line inside it.
+					graphics.fill(x - 1, y - 2, x1 + 1, y - 1, 0xFF000000);
+					graphics.fill(x - 1, y1 + 1, x1 + 1, y1 + 2, 0xFF000000);
+					graphics.fill(x - 2, y - 1, x - 1, y1 + 1, 0xFF000000);
+					graphics.fill(x1 + 1, y - 1, x1 + 2, y1 + 1, 0xFF000000);
+					border(graphics, x - 1, y - 1, x1 + 1, y1 + 1, 1, 0xFFA0A0A0);
+				} else {
+					graphics.fill(x - 2, y - 1, x1 + 2, y1 + 1, 0xFF000000);
+					graphics.fill(x - 1, y - 2, x1 + 1, y1 + 2, 0xFF000000);
+					graphics.fill(x - 1, y - 1, x1 + 1, y1 + 1, 0xFFA0A0A0);
+				}
 			}
 			case NONE -> {
 			}
@@ -246,7 +291,7 @@ public final class MinimapHud implements HudElement {
 	 * Minecraft edge's cut corners have nothing to cut on a circle, so it's a black ring around a
 	 * light grey one.
 	 */
-	private void roundFrame(GuiGraphicsExtractor graphics, Settings.Frame frame, int x, int y, int size) {
+	private void roundFrame(GuiGraphicsExtractor graphics, Settings.Frame frame, int x, int y, int size, boolean borderOnly) {
 		if (frame == Settings.Frame.NONE) {
 			return;
 		}
@@ -254,8 +299,19 @@ public final class MinimapHud implements HudElement {
 		float cx = x + size / 2.0F;
 		float cy = y + size / 2.0F;
 		boolean classic = frame == Settings.Frame.CLASSIC;
-		canvas.solid(new Circle(cx, cy, size / 2.0F + 2).disc(), classic ? 0xC0101418 : 0xFF000000);
-		canvas.solid(new Circle(cx, cy, size / 2.0F + 1).disc(), classic ? 0x60FFFFFF : 0xFFA0A0A0);
+		Circle outer = new Circle(cx, cy, size / 2.0F + 2);
+		Circle inner = new Circle(cx, cy, size / 2.0F + 1);
+		// Rings, not discs, for a see-through map: the discs would fill the whole minimap behind it.
+		canvas.solid(borderOnly ? outer.ring(2) : outer.disc(), classic ? 0xC0101418 : 0xFF000000);
+		canvas.solid(borderOnly ? inner.ring(1) : inner.disc(), classic ? 0x60FFFFFF : 0xFFA0A0A0);
+	}
+
+	/** A line {@code thickness} thick just inside a rectangle's edge, without filling the rectangle. */
+	private static void border(GuiGraphicsExtractor graphics, int x0, int y0, int x1, int y1, int thickness, int color) {
+		graphics.fill(x0, y0, x1, y0 + thickness, color);
+		graphics.fill(x0, y1 - thickness, x1, y1, color);
+		graphics.fill(x0, y0 + thickness, x0 + thickness, y1 - thickness, color);
+		graphics.fill(x1 - thickness, y0 + thickness, x1, y1 - thickness, color);
 	}
 
 	/** Letters on the frame. The map always faces north, so they never move. */

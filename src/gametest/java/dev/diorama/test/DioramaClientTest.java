@@ -1,5 +1,7 @@
 package dev.diorama.test;
 
+import dev.diorama.Claims;
+import dev.diorama.Diorama;
 import dev.diorama.DioramaClient;
 import dev.diorama.MapMenu;
 import dev.diorama.MapScreen;
@@ -10,6 +12,7 @@ import dev.diorama.Settings;
 import dev.diorama.SettingsScreen;
 import dev.diorama.WorldKey;
 import dev.diorama.bake.BiomeTints;
+import dev.diorama.bake.BlockLooks;
 import dev.diorama.bake.Overlays;
 import dev.diorama.bake.TileKey;
 import dev.diorama.data.ChunkSnapshot;
@@ -23,6 +26,7 @@ import dev.diorama.waypoint.WaypointListScreen;
 import dev.diorama.waypoint.WaypointOverlay;
 import dev.diorama.waypoint.WaypointShare;
 import dev.diorama.waypoint.WaypointStore;
+import dev.diorama.waypoint.WorldProjection;
 import dev.diorama.waypoint.XaeroImport;
 import net.fabricmc.fabric.api.client.gametest.v1.FabricClientGameTest;
 import net.fabricmc.fabric.api.client.gametest.v1.context.ClientGameTestContext;
@@ -108,6 +112,21 @@ public class DioramaClientTest implements FabricClientGameTest {
 			if (tests.contains("showcase")) {
 				showcase(context, world);
 			}
+			if (tests.contains("icon-waypoints")) {
+				IconWaypointsTest.photos(context, world);
+			}
+			if (tests.contains("drawings")) {
+				DrawingTest.run(context, world);
+			}
+			if (tests.contains("waypoint-clutter")) {
+				WaypointClutterTest.photos(context, world);
+			}
+			if (tests.contains("long-initials")) {
+				LongInitialsTest.photos(context, world);
+			}
+			if (tests.contains("portal-crossing")) {
+				portalCrossing(context, world);
+			}
 			if (tests.contains("dimensions")) {
 				dimensions(context, world);
 			}
@@ -132,6 +151,9 @@ public class DioramaClientTest implements FabricClientGameTest {
 			if (tests.contains("waypoints")) {
 				waypoints(context, world);
 			}
+			if (tests.contains("icons")) {
+				IconWaypointsTest.checks(context, world);
+			}
 			if (tests.contains("xaero-import")) {
 				xaeroImport(context, world);
 			}
@@ -147,8 +169,20 @@ public class DioramaClientTest implements FabricClientGameTest {
 			if (tests.contains("screens")) {
 				screens(context, world);
 			}
+			if (tests.contains("enlarge")) {
+				enlarge(context);
+			}
+			if (tests.contains("image-export")) {
+				ImageExportTest.run(context, world);
+			}
 			if (tests.contains("waystones")) {
 				waystones(context, world);
+			}
+			if (tests.contains("ftb-claims")) {
+				ftbClaims(context, world);
+			}
+			if (tests.contains("cobblemon")) {
+				cobblemonBattle(context, world);
 			}
 			//? if <1.21.6 {
 			/*if (tests.contains("broken-fog")) {
@@ -156,6 +190,7 @@ public class DioramaClientTest implements FabricClientGameTest {
 			}
 			*///?}
 			if (spawnCell != null) {
+				spawnProbesBeforeLeaving(context, world, spawnCell);
 				// Go far from spawn, so its chunks are long gone once the world is reopened.
 				world.getServer().runCommand("tp @a 3000 200 3000");
 				context.waitTicks(100);
@@ -177,12 +212,16 @@ public class DioramaClientTest implements FabricClientGameTest {
 		if (tests.contains("recreated-world")) {
 			recreatedWorld(context);
 		}
+		if (tests.contains("sub-maps")) {
+			subMaps(context);
+		}
 		if (tests.contains("multiplayer")) {
 			multiplayer(context);
 		}
 		// The server's side of Xaero's channels goes through Fabric API networking, so these run on
-		// Fabric only. On NeoForge the shim can't start a dedicated server anyway.
-		//? if fabric {
+		// Fabric only, and from 1.21, whose networking has payload types. On NeoForge and on 1.20.1
+		// the shim can't start a dedicated server anyway.
+		//? if >=1.21 && fabric {
 		if (tests.contains("server-id")) {
 			serverLevelIds(context);
 		}
@@ -302,6 +341,313 @@ public class DioramaClientTest implements FabricClientGameTest {
 				throw new AssertionError("Reopening the new world lost its waypoint");
 			}
 		}
+	}
+
+	/**
+	 * Sub-maps (#156), in a world of its own so the maps it leaves in use don't reach the other
+	 * tests. Main maps two places; a new map made through the Maps screen starts with only what's
+	 * around the player, without Main's waypoint and drawing, and leaves the Nether on its main map;
+	 * going back to Main brings them all back; a deleted map's tiles and waypoints go; and the map
+	 * in use is still in use when the world is opened again.
+	 */
+	private static void subMaps(ClientGameTestContext context) {
+		String overworld = "minecraft:overworld";
+		String nether = "minecraft:the_nether";
+		TestWorldSave save;
+		String newId;
+		String[] worldKeyLeft = new String[1];
+		try (TestSingleplayerContext world = context.worldBuilder()
+			.setUseConsistentSettings(false)
+			.adjustSettings(s -> {
+				s.setName("Diorama Sub-maps");
+				s.setSeed("diorama");
+				s.setGameMode(WorldCreationUiState.SelectedGameMode.CREATIVE);
+			})
+			.create()) {
+			save = world.getWorldSave();
+			world.getServer().runCommand("time set noon");
+			world.getServer().runCommand("weather clear");
+			context.waitFor(mc -> MapSession.get() != null && MapSession.get().map().chunkCount() > 400, 2400);
+			// Main maps a second place, 600 blocks east, then the player comes back.
+			world.getServer().runCommand("tp @a 600 120 0");
+			context.waitFor(mc -> mc.player.getX() > 500 && MapSession.get() != null && MapSession.get().map().chunk(600 >> 4, 0) != null, 2400);
+			settle(context, 100);
+			world.getServer().runCommand("tp @a 0 120 0");
+			context.waitFor(mc -> mc.player.getX() < 100, 600);
+			settle(context, 100);
+			String worldKey = context.computeOnClient(mc -> {
+				BlockPos at = mc.player.blockPosition();
+				WaypointStore.get().add(new Waypoint("Old Base", at.getX(), at.getY(), at.getZ(), overworld, Waypoint.PALETTE[3]));
+				WaypointStore.get().add(new Waypoint("Nether Hub", 10, 70, 10, nether, Waypoint.PALETTE[5]));
+				dev.diorama.drawing.DrawingStore.get().add(new dev.diorama.drawing.Drawing(dev.diorama.drawing.Drawing.Kind.NOTE, overworld, 0xFFFFFFFF,
+					new double[] {at.getX(), Projection.v(at.getY(), at.getZ())}, "Old note"));
+				return WorldKey.current();
+			});
+			worldKeyLeft[0] = worldKey;
+			java.nio.file.Path mainFolder = context.computeOnClient(mc -> dev.diorama.Maps.get().tileFolder(overworld, dev.diorama.Maps.MAIN));
+			context.waitFor(mc -> tileFiles(mainFolder) > 20 && hasTileAt(mainFolder, 600), 600);
+			long mainTiles = tileFiles(mainFolder);
+			context.setScreen(MapScreen::new);
+			context.runOnClient(mc -> ((MapScreen) mc.gui.screen()).lookAt(300, Projection.v(70, 0), 0.45, TileKey.SURFACE));
+			settle(context, 60);
+			context.takeScreenshot("sub-maps-01-main");
+
+			// The player makes a new map through the Maps screen, with the mouse (gliding, with GIF
+			// frames, under DIORAMA_GIF=1), and goes back to the map with Done.
+			holdFrames(context, 20);
+			glideClick(context, "diorama.map.maps");
+			context.waitFor(mc -> mc.gui.screen() instanceof dev.diorama.MapsScreen, 40);
+			holdFrames(context, 20);
+			context.takeScreenshot("sub-maps-02-maps-screen");
+			glideClick(context, "diorama.maps.new");
+			context.waitFor(mc -> mc.gui.screen() instanceof dev.diorama.MapNameScreen, 40);
+			String suggested = context.computeOnClient(mc -> editBoxes(mc.gui.screen()).get(0).getValue());
+			if (!suggested.equals("Map 2")) {
+				throw new AssertionError("A second map should be suggested as Map 2, not " + suggested);
+			}
+			holdFrames(context, 15);
+			context.runOnClient(mc -> editBoxes(mc.gui.screen()).get(0).setValue(""));
+			for (char c : "After the reset".toCharArray()) {
+				context.getInput().typeChars(String.valueOf(c));
+				context.waitTick();
+				menuFrame(context);
+			}
+			holdFrames(context, 10);
+			context.takeScreenshot("sub-maps-03-name");
+			glideClick(context, "diorama.waypoint.save");
+			context.waitFor(mc -> mc.gui.screen() instanceof dev.diorama.MapsScreen, 40);
+			holdFrames(context, 25);
+			newId = context.computeOnClient(mc -> dev.diorama.Maps.get().active(overworld));
+			if (newId.equals(dev.diorama.Maps.MAIN)) {
+				throw new AssertionError("Saving a new map didn't switch the Overworld to it");
+			}
+			if (!context.computeOnClient(mc -> dev.diorama.Maps.get().active(nether)).equals(dev.diorama.Maps.MAIN)) {
+				throw new AssertionError("A new Overworld map switched the Nether's too");
+			}
+			context.takeScreenshot("sub-maps-04-maps-screen-two");
+			glideClick(context, "gui.done");
+			context.waitFor(mc -> mc.gui.screen() instanceof MapScreen, 40);
+			// The new map fills in from the chunks already loaded around the player, and only those.
+			for (int i = 0; i < 80; i++) {
+				context.waitTick();
+				menuFrame(context);
+			}
+			context.waitFor(mc -> MapSession.get() != null && MapSession.get().map().chunkCount() > 300, 600);
+			settle(context, 100);
+			holdFrames(context, 1);
+			context.takeScreenshot("sub-maps-05-new-map");
+			java.nio.file.Path newFolder = context.computeOnClient(mc -> dev.diorama.Maps.get().tileFolder(overworld, newId));
+			context.waitFor(mc -> tileFiles(newFolder) > 0, 600);
+			context.runOnClient(mc -> {
+				if (WaypointStore.get().all().stream().anyMatch(w -> w.name.equals("Old Base"))) {
+					throw new AssertionError("Main's waypoint shows on the new map");
+				}
+				if (WaypointStore.get().all().stream().noneMatch(w -> w.name.equals("Nether Hub"))) {
+					throw new AssertionError("The Nether's waypoint went with the Overworld's map");
+				}
+				if (!dev.diorama.drawing.DrawingStore.get().in(overworld).isEmpty()) {
+					throw new AssertionError("Main's drawing shows on the new map");
+				}
+				if (hasTileAt(newFolder, 600) || MapSession.get().map().chunk(600 >> 4, 0) != null) {
+					throw new AssertionError("The new map has the place only Main mapped");
+				}
+				BlockPos at = mc.player.blockPosition();
+				WaypointStore.get().add(new Waypoint("New Base", at.getX(), at.getY(), at.getZ(), overworld, Waypoint.PALETTE[1]));
+			});
+
+			// Back to Main: its tiles, waypoint and drawing are all there, the new map's waypoint isn't.
+			clickButton(context, "diorama.map.maps");
+			context.waitFor(mc -> mc.gui.screen() instanceof dev.diorama.MapsScreen, 40);
+			clickMapsRow(context, 0);
+			clickButton(context, "diorama.maps.use");
+			context.waitFor(mc -> dev.diorama.Maps.get().active(overworld).equals(dev.diorama.Maps.MAIN) && MapSession.get() != null, 200);
+			context.runOnClient(mc -> {
+				if (WaypointStore.get().all().stream().noneMatch(w -> w.name.equals("Old Base"))) {
+					throw new AssertionError("Main's waypoint didn't come back with Main");
+				}
+				if (WaypointStore.get().all().stream().anyMatch(w -> w.name.equals("New Base"))) {
+					throw new AssertionError("The new map's waypoint shows on Main");
+				}
+				if (dev.diorama.drawing.DrawingStore.get().in(overworld).stream().noneMatch(d -> d.text.equals("Old note"))) {
+					throw new AssertionError("Main's drawing didn't come back with Main");
+				}
+			});
+			if (!hasTileAt(mainFolder, 600) || tileFiles(mainFolder) < mainTiles) {
+				throw new AssertionError("Main lost tiles: " + mainTiles + " then " + tileFiles(mainFolder));
+			}
+			// And the map open now reads them: the place only Main mapped shows again.
+			context.setScreen(MapScreen::new);
+			context.runOnClient(mc -> ((MapScreen) mc.gui.screen()).lookAt(600, Projection.v(70, 0), 2.0, TileKey.SURFACE));
+			settle(context, 60);
+			context.runOnClient(mc -> {
+				MapTile east = MapSession.get().map().peek(new TileKey(TileKey.SURFACE, Math.floorDiv(600, Projection.TILE_UNITS),
+					(int) Math.floor(Projection.v(70, 0) / Projection.TILE_UNITS)));
+				if (east == null || !east.hasCoverage()) {
+					throw new AssertionError("Back on Main, the map doesn't show the place Main mapped 600 blocks east");
+				}
+			});
+			context.takeScreenshot("sub-maps-05b-main-again-east");
+			context.setScreen(() -> null);
+
+			// A third map, then deleting it from Main: its tiles and waypoint go, nothing else does.
+			String scratchId = context.computeOnClient(mc -> {
+				String id = dev.diorama.Maps.get().create(overworld, "Scratch");
+				BlockPos at = mc.player.blockPosition();
+				WaypointStore.get().add(new Waypoint("Scratch Pin", at.getX(), at.getY(), at.getZ(), overworld, Waypoint.PALETTE[2]));
+				return id;
+			});
+			java.nio.file.Path scratchFolder = context.computeOnClient(mc -> dev.diorama.Maps.get().tileFolder(overworld, scratchId));
+			context.waitFor(mc -> MapSession.get() != null && tileFiles(scratchFolder) > 0, 600);
+			context.runOnClient(mc -> dev.diorama.Maps.get().use(overworld, dev.diorama.Maps.MAIN));
+			context.setScreen(() -> new dev.diorama.MapsScreen(null));
+			context.waitTicks(10);
+			clickMapsRow(context, 2);
+			clickButton(context, "diorama.waypoint.delete");
+			context.takeScreenshot("sub-maps-06-delete-armed");
+			clickButton(context, "diorama.menu.delete_confirm");
+			context.runOnClient(mc -> {
+				if (java.nio.file.Files.exists(scratchFolder)) {
+					throw new AssertionError("The deleted map's tiles are still there: " + scratchFolder);
+				}
+				if (dev.diorama.Maps.get().list(overworld).size() != 2) {
+					throw new AssertionError("Expected Main and After the reset left, not " + dev.diorama.Maps.get().list(overworld));
+				}
+			});
+			String saved = readFile(context.computeOnClient(mc -> WorldKey.folder(worldKey).resolve("waypoints.json")));
+			if (saved.contains("Scratch Pin") || !saved.contains("New Base") || !saved.contains("Old Base")) {
+				throw new AssertionError("After deleting Scratch the waypoints file should keep Old Base and New Base only: " + saved);
+			}
+
+			// A list that can't be saved changes nothing: no new map, the same map in use.
+			java.nio.file.Path mapsFile = context.computeOnClient(mc -> WorldKey.folder(worldKey).resolve("maps.json"));
+			java.nio.file.Path blocker = mapsFile.resolveSibling("maps.json.tmp");
+			try {
+				java.nio.file.Files.createDirectories(blocker);
+			} catch (java.io.IOException e) {
+				throw new AssertionError(e);
+			}
+			context.runOnClient(mc -> {
+				if (dev.diorama.Maps.get().create(overworld, "Blocked") != null) {
+					throw new AssertionError("A map was made though the list of maps couldn't be saved");
+				}
+				if (dev.diorama.Maps.get().list(overworld).size() != 2 || !dev.diorama.Maps.get().active(overworld).equals(dev.diorama.Maps.MAIN)) {
+					throw new AssertionError("A failed save changed the maps: " + dev.diorama.Maps.get().list(overworld));
+				}
+			});
+			try {
+				java.nio.file.Files.delete(blocker);
+			} catch (java.io.IOException e) {
+				throw new AssertionError(e);
+			}
+
+			// Leave on the new map.
+			context.runOnClient(mc -> dev.diorama.Maps.get().use(overworld, newId));
+			context.setScreen(() -> null);
+			context.waitTicks(40);
+		}
+		// A hand edit breaks the End's entry: the Overworld's maps still open, and the file is kept aside.
+		java.nio.file.Path mapsFile = context.computeOnClient(mc -> WorldKey.folder(worldKeyLeft[0]).resolve("maps.json"));
+		try {
+			String text = java.nio.file.Files.readString(mapsFile);
+			if (!text.contains("\"dimensions\": {")) {
+				throw new AssertionError("Unexpected maps file: " + text);
+			}
+			java.nio.file.Files.writeString(mapsFile, text.replace("\"dimensions\": {", "\"dimensions\": {\"minecraft:the_end\": {\"maps\": \"broken\"},"));
+		} catch (java.io.IOException e) {
+			throw new AssertionError(e);
+		}
+		try (TestSingleplayerContext reopened = save.open()) {
+			context.waitFor(mc -> MapSession.get() != null && MapSession.get().map().chunkCount() > 100, 1200);
+			context.runOnClient(mc -> {
+				if (!dev.diorama.Maps.get().active(overworld).equals(newId)) {
+					throw new AssertionError("Reopening the world didn't open the map in use when it was left");
+				}
+				if (WaypointStore.get().all().stream().noneMatch(w -> w.name.equals("New Base"))
+					|| WaypointStore.get().all().stream().anyMatch(w -> w.name.equals("Old Base"))) {
+					throw new AssertionError("Reopened on the new map, the waypoints should be its own");
+				}
+			});
+			try (java.util.stream.Stream<java.nio.file.Path> kept = java.nio.file.Files.list(mapsFile.getParent())) {
+				if (kept.noneMatch(f -> f.getFileName().toString().startsWith("maps.json.unreadable-"))) {
+					throw new AssertionError("The maps file with a broken entry wasn't kept aside");
+				}
+			} catch (java.io.IOException e) {
+				throw new AssertionError(e);
+			}
+			context.setScreen(MapScreen::new);
+			settle(context, 60);
+			context.takeScreenshot("sub-maps-07-reopened");
+			context.setScreen(() -> null);
+		}
+	}
+
+	/** Whether a map folder has a full-detail surface tile in the column of map units that x is in. */
+	private static boolean hasTileAt(java.nio.file.Path folder, int x) {
+		String column = Math.floorDiv(x, Projection.TILE_UNITS) + "_";
+		try (java.util.stream.Stream<java.nio.file.Path> files = java.nio.file.Files.list(folder)) {
+			return files.filter(java.nio.file.Files::isDirectory).filter(d -> d.getFileName().toString().startsWith("surface")).anyMatch(d -> {
+				try (java.util.stream.Stream<java.nio.file.Path> tiles = java.nio.file.Files.list(d)) {
+					return tiles.anyMatch(t -> t.getFileName().toString().startsWith(column) && t.toString().endsWith(".omt"));
+				} catch (java.io.IOException e) {
+					return false;
+				}
+			});
+		} catch (java.io.IOException e) {
+			return false;
+		}
+	}
+
+	/** How many tile files a map folder holds, at every level. */
+	private static long tileFiles(java.nio.file.Path folder) {
+		if (!java.nio.file.Files.isDirectory(folder)) {
+			return 0;
+		}
+		try (java.util.stream.Stream<java.nio.file.Path> files = java.nio.file.Files.walk(folder)) {
+			return files.filter(f -> f.toString().endsWith(".omt")).count();
+		} catch (java.io.IOException | java.io.UncheckedIOException e) {
+			return 0;
+		}
+	}
+
+	private static String readFile(java.nio.file.Path file) {
+		try {
+			return java.nio.file.Files.readString(file);
+		} catch (java.io.IOException e) {
+			throw new AssertionError(e);
+		}
+	}
+
+	/**
+	 * Clicks a button by its label's key with the mouse. Under DIORAMA_GIF=1 the cursor glides there
+	 * and each tick is a GIF frame (see moveCursor).
+	 */
+	private static void glideClick(ClientGameTestContext context, String translationKey) {
+		String label = net.minecraft.network.chat.Component.translatable(translationKey).getString();
+		double[] at = context.computeOnClient(mc -> {
+			var button = buttonLabelled(mc.gui.screen(), label);
+			double scale = mc.getWindow().getGuiScale();
+			return new double[] {(button.getX() + button.getWidth() / 2.0) * scale, (button.getY() + button.getHeight() / 2.0) * scale};
+		});
+		moveCursor(context, at[0], at[1]);
+		holdFrames(context, 6);
+		context.getInput().pressMouse(InputConstants.MOUSE_BUTTON_LEFT);
+		context.waitTicks(2);
+		holdFrames(context, 2);
+	}
+
+	/** Under DIORAMA_GIF=1, this many ticks of GIF frames with the cursor still. */
+	private static void holdFrames(ClientGameTestContext context, int frames) {
+		for (int i = 0; i < (MENU_GIF ? frames : 0); i++) {
+			context.waitTick();
+			menuFrame(context);
+		}
+	}
+
+	/** Clicks a row of the Maps screen's list by its place, with the mouse. */
+	private static void clickMapsRow(ClientGameTestContext context, int row) {
+		double[] at = context.computeOnClient(mc -> new double[] {mc.gui.screen().width / 2.0 - 100, 48 + 2 + row * 26 + 12});
+		clickAtGui(context, at[0], at[1]);
+		context.waitTicks(6);
 	}
 
 	private static final long REALM_ID = 4242;
@@ -458,8 +804,10 @@ public class DioramaClientTest implements FabricClientGameTest {
 	/** What the dedicated server sends a player a second after they join: a level ID message, or nothing. */
 	private static byte @Nullable [] levelIdOnJoin;
 	private static boolean joinHooked;
+	//? if >=1.21 {
 	private static final net.minecraft.network.protocol.common.custom.CustomPacketPayload.Type<dev.diorama.XaeroChannels.Message> WORLD_INFO =
 		new net.minecraft.network.protocol.common.custom.CustomPacketPayload.Type<>(net.minecraft.resources.Identifier.fromNamespaceAndPath("worldinfo", "world_id"));
+	//?}
 
 	/**
 	 * A network's two servers whose worlds share a seed, each naming its world with a level ID a
@@ -468,7 +816,7 @@ public class DioramaClientTest implements FabricClientGameTest {
 	 * on the first visit, and keeps it for that visit when the ID comes. From the next visit on,
 	 * the map waits for the ID, since the address named a world before.
 	 */
-	//? if fabric {
+	//? if >=1.21 && fabric {
 	private static void serverLevelIds(ClientGameTestContext context) {
 		String address = WorldKey.key("server", "localhost:" + SERVER_PORT);
 		context.runOnClient(mc -> {
@@ -512,7 +860,21 @@ public class DioramaClientTest implements FabricClientGameTest {
 		String survival = playOnServer(context, "diorama-shared", "id-survival", null, "Survival Camp", List.of(), List.of("Old Camp", "Lobby Camp"), false, SURVIVAL_ID);
 		net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.unregisterGlobalReceiver(WORLD_INFO.id());
 		String lobbyAgain = playOnServer(context, "diorama-shared", "id-lobby-again", null, null, List.of("Lobby Camp"), List.of("Old Camp", "Survival Camp"), true, LOBBY_ID);
+		// With Xaero's mods installed, the channels are theirs and Diorama has no handler there,
+		// but it still reads the level ID on the way: survival opens its own folder again.
+		dev.diorama.XaeroChannels.handOverForTests(true);
+		String survivalWithXaero;
+		try {
+			survivalWithXaero = playOnServer(context, "diorama-shared", "id-survival-xaero", null, null, List.of("Survival Camp"), List.of("Old Camp", "Lobby Camp"), true, SURVIVAL_ID);
+			levelIdBeforeHop(context, address, false);
+			levelIdBeforeHop(context, address, true);
+		} finally {
+			dev.diorama.XaeroChannels.handOverForTests(false);
+		}
 		levelIdOnJoin = null;
+		if (!survivalWithXaero.equals(survival)) {
+			throw new AssertionError("With Xaero's mods holding the channels, survival opened " + survivalWithXaero + ", not " + survival);
+		}
 		if (!lobby.equals(address + "-id-7c56d495") || !survival.equals(address + "-id-04adb1e4")) {
 			throw new AssertionError("The level IDs didn't name the folders: " + lobby + ", " + survival);
 		}
@@ -522,6 +884,52 @@ public class DioramaClientTest implements FabricClientGameTest {
 		List<String> old = context.computeOnClient(mc -> WaypointStore.open(seeded).all().stream().map(w -> w.name).toList());
 		if (!old.equals(List.of("Old Camp"))) {
 			throw new AssertionError("The seed's folder lost its waypoint or took another world's: " + old);
+		}
+	}
+	//?}
+
+	/**
+	 * A level ID the server sends just before moving the player to the Nether names the level it
+	 * came in, not the Nether, which waits for its own: the ID keeps its place among the packets,
+	 * also in a bundle ({@code bundled}), whose packets the client handles on its own thread. Run
+	 * while Xaero's mods hold the channels, where Diorama reads IDs on the way to them.
+	 */
+	//? if >=1.21 && fabric {
+	private static void levelIdBeforeHop(ClientGameTestContext context, String address, boolean bundled) {
+		levelIdOnJoin = LOBBY_ID;
+		try (TestDedicatedServerContext server = context.worldBuilder()
+			.setUseConsistentSettings(false)
+			.adjustSettings(s -> s.setSeed("diorama-hop"))
+			.createServer(serverProperties())) {
+			try (TestDedicatedServerConnection connection = server.connect()) {
+				context.waitFor(mc -> MapSession.get() != null && MapSession.get().map().chunkCount() > 50, 2400);
+				String overworld = context.computeOnClient(mc -> WorldKey.current());
+				// The overworld's ID again, then the move to the Nether. The client only runs when the
+				// test lets it, so both are waiting when it next handles packets, as when they reach a
+				// client mid-frame. It handles them and opens the Nether's map, or waits for its ID,
+				// which comes after.
+				server.runOnServer(s -> {
+					net.minecraft.network.protocol.common.ClientboundCustomPayloadPacket id = new net.minecraft.network.protocol.common.ClientboundCustomPayloadPacket(
+						new dev.diorama.XaeroChannels.Message(dev.diorama.XaeroChannels.MINIMAP, LOBBY_ID[0], java.util.Arrays.copyOfRange(LOBBY_ID, 1, LOBBY_ID.length)));
+					s.getPlayerList().getPlayers().get(0).connection.send(bundled
+						? new net.minecraft.network.protocol.game.ClientboundBundlePacket(List.<net.minecraft.network.protocol.Packet<? super net.minecraft.network.protocol.game.ClientGamePacketListener>>of(id))
+						: id);
+					s.getCommands().performPrefixedCommand(s.createCommandSourceStack(), "execute in minecraft:the_nether run tp @a 0 100 0");
+				});
+				try {
+					Thread.sleep(500);
+				} catch (InterruptedException e) {
+					throw new AssertionError(e);
+				}
+				context.waitTicks(5);
+				sendXaero(server, SURVIVAL_ID);
+				context.waitFor(mc -> mc.level != null && mc.level.dimension() == net.minecraft.world.level.Level.NETHER && WorldKey.current() != null, 600);
+				String nether = context.computeOnClient(mc -> WorldKey.current());
+				levelIdOnJoin = null;
+				if (!overworld.equals(address + "-id-7c56d495") || !nether.equals(address + "-id-04adb1e4")) {
+					throw new AssertionError("The ID sent " + (bundled ? "in a bundle " : "") + "before the move to the Nether named the wrong level: overworld " + overworld + ", Nether " + nether);
+				}
+			}
 		}
 	}
 	//?}
@@ -538,7 +946,7 @@ public class DioramaClientTest implements FabricClientGameTest {
 	 * with their face and name, move when the server says they moved, hide under fair play, and
 	 * go when the server stops tracking them.
 	 */
-	//? if fabric {
+	//? if >=1.21 && fabric {
 	private static void trackedPlayers(ClientGameTestContext context) {
 		java.util.Properties properties = serverProperties();
 		java.util.concurrent.atomic.AtomicInteger answers = new java.util.concurrent.atomic.AtomicInteger();
@@ -745,13 +1153,43 @@ public class DioramaClientTest implements FabricClientGameTest {
 			}
 			return new int[] {tu, tv, cx, cy};
 		});
-		// Where the right-click menu puts the player around spawn while its chunks are loaded, to
-		// compare with after the restart. Several places, as a waypoint may cover one by then.
+		spawnPosition = context.computeOnClient(mc -> new double[] {mc.player.getX(), mc.player.getY(), mc.player.getZ()});
+		spawnProbes = spawnProbes(context, cell);
+		context.setScreen(() -> null);
+		return cell;
+	}
+
+	/** Where the player stood when the spawn cell was found. */
+	private static double[] spawnPosition = new double[3];
+
+	/**
+	 * The scenarios before the restart build and dig around spawn, so where the menu puts the player
+	 * there is taken again just before leaving, from spawn's chunks as they are then. Taken at the
+	 * start, it compared the saved map with ground that had since changed, and failed whenever a
+	 * whole suite ran.
+	 */
+	private static void spawnProbesBeforeLeaving(ClientGameTestContext context, TestSingleplayerContext world, int[] cell) {
+		world.getServer().runCommand("execute in minecraft:overworld run tp @a " + spawnPosition[0] + " " + spawnPosition[1] + " " + spawnPosition[2]);
+		int chunkX = (int) Math.floor(spawnPosition[0]) >> 4, chunkZ = (int) Math.floor(spawnPosition[2]) >> 4;
+		// The player there, not just the chunk: the map may still hold spawn's chunk from earlier. Not
+		// the height, as the ground they land on may have changed.
+		context.waitFor(mc -> mc.player != null && mc.level.dimension() == net.minecraft.world.level.Level.OVERWORLD
+			&& Math.abs(mc.player.getX() - spawnPosition[0]) < 0.5 && Math.abs(mc.player.getZ() - spawnPosition[2]) < 0.5
+			&& MapSession.get() != null && MapSession.get().map().chunk(chunkX, chunkZ) != null, 2400);
+		settle(context, 100);
+		spawnProbes = spawnProbes(context, cell);
+	}
+
+	/**
+	 * Where the right-click menu puts the player around spawn while its chunks are loaded, to
+	 * compare with after the restart. Several places, as a waypoint may cover one by then.
+	 */
+	private static List<double[]> spawnProbes(ClientGameTestContext context, int[] cell) {
 		double cellUnits = (double) Projection.TILE_UNITS / Projection.COVERAGE_CELLS;
 		// The middle of a block column and of a pixel row.
 		double u0 = cell[0] * Projection.TILE_UNITS + cell[2] * cellUnits + 0.5;
 		double v0 = cell[1] * Projection.TILE_UNITS + cell[3] * cellUnits + 2.5 / Projection.PIXELS_PER_UNIT;
-		spawnProbes = context.computeOnClient(mc -> {
+		return context.computeOnClient(mc -> {
 			List<double[]> probes = new java.util.ArrayList<>();
 			for (int[] offset : new int[][] {{0, 0}, {12, 0}, {-12, 0}, {0, 12}, {0, -12}, {12, 12}, {-12, -12}}) {
 				double u = u0 + offset[0];
@@ -767,8 +1205,6 @@ public class DioramaClientTest implements FabricClientGameTest {
 			}
 			return probes;
 		});
-		context.setScreen(() -> null);
-		return cell;
 	}
 
 	/** Map points around spawn and where the right-click menu put the player there before the restart: {u, v, x, y, z}. */
@@ -838,6 +1274,29 @@ public class DioramaClientTest implements FabricClientGameTest {
 		if (!java.util.Arrays.equals(savedSpot, spot)) {
 			throw new AssertionError("After the restart, the menu offers " + java.util.Arrays.toString(savedSpot)
 				+ " at spawn; before it, " + java.util.Arrays.toString(spot));
+		}
+
+		// A tile saved by Diorama 0.3.0 or older has no spots: in singleplayer the menu finds the
+		// ground in the world's save instead (#145).
+		context.setScreen(MapScreen::new);
+		double[] oldProbe = freeSpawnProbe(context);
+		TileKey oldTile = new TileKey(TileKey.SURFACE, (int) Math.floor(oldProbe[0] / Projection.TILE_UNITS), (int) Math.floor(oldProbe[1] / Projection.TILE_UNITS));
+		MapLevel level = context.computeOnClient(mc -> MapSession.get().map());
+		level.forgetSpots(oldTile);
+		if (level.hasSavedSpots(oldTile)) {
+			throw new AssertionError("Tile " + oldTile + " still has spots after forgetting them");
+		}
+		rightClickAt(context, oldProbe[5], oldProbe[6]);
+		context.takeScreenshot("saved-map-01c-menu-on-old-tile");
+		List<String> oldLabels = context.computeOnClient(mc -> ((MapScreen) mc.gui.screen()).menu().labels());
+		if (oldLabels.equals(List.of("Nothing mapped here"))) {
+			throw new AssertionError("On a tile saved without spots, the menu says nothing is mapped at spawn, which the map shows");
+		}
+		int[] worldSpot = menuSpot(context);
+		int[] oldSpot = {(int) oldProbe[2], (int) oldProbe[3], (int) oldProbe[4]};
+		if (!java.util.Arrays.equals(worldSpot, oldSpot)) {
+			throw new AssertionError("On a tile saved without spots, the menu offers " + java.util.Arrays.toString(worldSpot)
+				+ " at spawn; with its chunks loaded, " + java.util.Arrays.toString(oldSpot));
 		}
 		context.setScreen(MapScreen::new);
 		context.runOnClient(mc -> {
@@ -952,6 +1411,89 @@ public class DioramaClientTest implements FabricClientGameTest {
 			}
 		}
 		return 0F;
+	}
+
+	/**
+	 * Crossing between dimensions keeps the block color table: building it takes seconds with a
+	 * big modpack's states, and it used to be rebuilt on every crossing (#150). Walks through a
+	 * nether portal and comes back with /execute in, three times, and checks the table is never
+	 * rebuilt and the map only ever moves with the player. Then reloads resources, which must
+	 * rebuild it once. Works with Immersive Portals installed too, whose portals keep the other
+	 * side's level loaded. Opt-in: DIORAMA_TESTS=portal-crossing.
+	 */
+	private static void portalCrossing(ClientGameTestContext context, TestSingleplayerContext world) {
+		BlockPos p = context.computeOnClient(mc -> mc.player.blockPosition());
+		int x = p.getX(), y = p.getY(), z = p.getZ();
+		world.getServer().runCommand("fill " + (x - 4) + " " + (y - 2) + " " + (z - 4) + " " + (x + 8) + " " + (y - 1) + " " + (z + 12) + " stone");
+		world.getServer().runCommand("fill " + (x - 4) + " " + y + " " + (z - 4) + " " + (x + 8) + " " + (y + 8) + " " + (z + 12) + " air");
+		int fz = z + 4;
+		world.getServer().runCommand("fill " + x + " " + (y - 1) + " " + fz + " " + (x + 3) + " " + (y + 3) + " " + fz + " obsidian");
+		world.getServer().runCommand("fill " + (x + 1) + " " + y + " " + fz + " " + (x + 2) + " " + (y + 2) + " " + fz + " air");
+		String start = (x + 2) + " " + y + " " + z + ".5 0 0";
+		int builds = context.computeOnClient(mc -> BlockLooks.builds());
+		int sessions = context.computeOnClient(mc -> MapSession.started());
+		world.getServer().runCommand("setblock " + (x + 1) + " " + y + " " + fz + " fire");
+		// With Immersive Portals, chunks of the Nether stream in through the open portal. The map
+		// stays on the overworld.
+		crossing(context, "portal lit", 100);
+		context.takeScreenshot("portal-crossing-01-lit");
+		if (context.computeOnClient(mc -> MapSession.started()) != sessions) {
+			throw new AssertionError("The map left the overworld while the player stood by the portal");
+		}
+		for (int round = 0; round < 3; round++) {
+			context.runOnClient(mc -> {
+				mc.player.snapTo(x + 2.0, y, z + 0.5, 0F, 0F);
+				mc.options.keyUp.setDown(true);
+			});
+			crossing(context, "walk through " + round, 120);
+			context.runOnClient(mc -> mc.options.keyUp.setDown(false));
+			if (round == 0) {
+				context.takeScreenshot("portal-crossing-02-nether");
+			}
+			if (context.computeOnClient(mc -> mc.level.dimension() != net.minecraft.world.level.Level.NETHER)) {
+				throw new AssertionError("Walking through the portal didn't reach the Nether");
+			}
+			teleport(context, world, net.minecraft.world.level.Level.OVERWORLD, start);
+			crossing(context, "back with /execute in " + round, 100);
+		}
+		teleport(context, world, net.minecraft.world.level.Level.NETHER, "0 70 0");
+		crossing(context, "/execute in the Nether", 100);
+		teleport(context, world, net.minecraft.world.level.Level.OVERWORLD, start);
+		crossing(context, "/execute in the overworld", 100);
+		int rebuilt = context.computeOnClient(mc -> BlockLooks.builds()) - builds;
+		if (rebuilt != 0) {
+			throw new AssertionError("Crossing between dimensions rebuilt the block color table " + rebuilt + " times");
+		}
+		int started = context.computeOnClient(mc -> MapSession.started()) - sessions;
+		if (started != 8) {
+			throw new AssertionError("8 crossings started " + started + " map sessions");
+		}
+		context.runOnClient(mc -> mc.reloadResourcePacks());
+		context.waitFor(mc -> BlockLooks.builds() > builds, 2400);
+		crossing(context, "after a resource reload", 100);
+		if (context.computeOnClient(mc -> BlockLooks.builds()) != builds + 1) {
+			throw new AssertionError("A resource reload rebuilt the block color table more than once");
+		}
+	}
+
+	/** Teleports the player into another dimension and waits until they are there. */
+	private static void teleport(ClientGameTestContext context, TestSingleplayerContext world, net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level> dimension, String at) {
+		world.getServer().runCommand("execute in " + dimension.identifier() + " run tp @a " + at);
+		context.waitFor(mc -> mc.level.dimension() == dimension && MapSession.get() != null, 2400);
+	}
+
+	/** Waits some ticks and logs the slowest one, and the block color builds and map sessions so far. */
+	private static void crossing(ClientGameTestContext context, String label, int ticks) {
+		long last = System.nanoTime();
+		long slowest = 0;
+		for (int i = 0; i < ticks; i++) {
+			context.waitTick();
+			long now = System.nanoTime();
+			slowest = Math.max(slowest, now - last);
+			last = now;
+		}
+		Diorama.LOGGER.info("[portal-crossing] {}: slowest tick {} ms; {} block color builds and {} map sessions so far", label, slowest / 1_000_000,
+			(Object) context.<Integer, RuntimeException>computeOnClient(mc -> BlockLooks.builds()), (Object) context.<Integer, RuntimeException>computeOnClient(mc -> MapSession.started()));
 	}
 
 	/** The Nether and the End: the minimap, and the fullscreen map near and far. */
@@ -2027,7 +2569,11 @@ public class DioramaClientTest implements FabricClientGameTest {
 			RemotePlayer other = new RemotePlayer(mc.level, new GameProfile(UUID.fromString("069a79f4-44e9-4726-a5be-fca90e38aaf5"), "Notch"));
 			other.setId(-424242);
 			other.snapTo(x - 3.5, y, z + 8.5);
+			//? if >=1.21 {
 			mc.level.addEntity(other);
+			//?} else {
+			/*mc.level.addPlayer(other.getId(), other);
+			*///?}
 		});
 		settle(context, 60);
 		context.takeScreenshot("radar-01-minimap");
@@ -2230,13 +2776,15 @@ public class DioramaClientTest implements FabricClientGameTest {
 			{"rabbit", "9", "-9", "", "own", "item minecraft:carrot"},
 			{"zombie", "9", "-8", "", "own", "own"},
 		};
+		// Invulnerable, as the radar's mobs are: it's night, and a zombie that spawns nearby kills the
+		// villager while the packs reload.
 		for (String[] mob : mobs) {
 			world.getServer().runCommand("summon " + mob[0] + " " + (x + Integer.parseInt(mob[1])) + " " + y + " " + (z + Integer.parseInt(mob[2]))
-				+ " {NoAI:1b,PersistenceRequired:1b,Silent:1b" + mob[3] + "}");
+				+ " {NoAI:1b,PersistenceRequired:1b,Silent:1b,Invulnerable:1b" + mob[3] + "}");
 		}
 		// An item well above: its caret sits on its slot.
 		world.getServer().runCommand("fill " + (x - 8) + " " + y + " " + (z - 8) + " " + (x - 8) + " " + (y + 4) + " " + (z - 8) + " stone");
-		world.getServer().runCommand("summon rabbit " + (x - 8) + " " + (y + 5) + " " + (z - 8) + " {NoAI:1b,PersistenceRequired:1b,Silent:1b}");
+		world.getServer().runCommand("summon rabbit " + (x - 8) + " " + (y + 5) + " " + (z - 8) + " {NoAI:1b,PersistenceRequired:1b,Silent:1b,Invulnerable:1b}");
 		context.waitTicks(20);
 		assertIcons(context, x, z, mobs, 4, "without the pack");
 		settle(context, 40);
@@ -2255,7 +2803,10 @@ public class DioramaClientTest implements FabricClientGameTest {
 				//? if >=1.21.9 {
 				int format = net.minecraft.SharedConstants.getCurrentVersion().packVersion(net.minecraft.server.packs.PackType.CLIENT_RESOURCES).major();
 				String formats = "\"pack_format\": " + format + ", \"min_format\": " + format + ", \"max_format\": " + format;
-				//?} else {
+				//?} else if >=1.21.6 {
+				/*int format = net.minecraft.SharedConstants.getCurrentVersion().packVersion(net.minecraft.server.packs.PackType.CLIENT_RESOURCES);
+				String formats = "\"pack_format\": " + format;
+				*///?} else {
 				/*int format = net.minecraft.SharedConstants.getCurrentVersion().getPackVersion(net.minecraft.server.packs.PackType.CLIENT_RESOURCES);
 				String formats = "\"pack_format\": " + format;
 				*///?}
@@ -2342,7 +2893,7 @@ public class DioramaClientTest implements FabricClientGameTest {
 	}
 
 	/** Changes the resource packs and reloads them, as F3+T does, and waits until the game is back. */
-	private static void reloadPacks(ClientGameTestContext context, java.util.function.Consumer<Minecraft> change) {
+	static void reloadPacks(ClientGameTestContext context, java.util.function.Consumer<Minecraft> change) {
 		java.util.concurrent.CompletableFuture<Void> done = context.computeOnClient(mc -> {
 			change.accept(mc);
 			return mc.reloadResourcePacks();
@@ -2391,6 +2942,15 @@ public class DioramaClientTest implements FabricClientGameTest {
 		});
 		context.setScreen(() -> new WaypointListScreen(null));
 		context.waitTicks(3);
+		// Over a button, as a player's cursor may well be: the click still adds a waypoint.
+		double[] overButton = context.computeOnClient(mc -> {
+			net.minecraft.client.gui.components.Button button = mc.gui.screen().children().stream()
+				.filter(child -> child instanceof net.minecraft.client.gui.components.Button)
+				.map(child -> (net.minecraft.client.gui.components.Button) child).findFirst().orElseThrow();
+			double scale = mc.getWindow().getGuiScale();
+			return new double[] {(button.getX() + button.getWidth() / 2.0) * scale, (button.getY() + button.getHeight() / 2.0) * scale};
+		});
+		context.getInput().setCursorPos(overButton[0], overButton[1]);
 		context.getInput().pressMouse(InputConstants.MOUSE_BUTTON_LEFT + 3);
 		context.waitTicks(3);
 		boolean mouseOpenedEditor = context.computeOnClient(mc -> mc.gui.screen() instanceof WaypointEditScreen);
@@ -2441,6 +3001,7 @@ public class DioramaClientTest implements FabricClientGameTest {
 		*///?}
 		context.waitTicks(10);
 		context.takeScreenshot("waypoints-02-in-world");
+		waypointsUnderTheGui(context);
 
 		context.setScreen(MapScreen::new);
 		lookAtPlayer(context, 4.0, TileKey.SURFACE);
@@ -3204,6 +3765,342 @@ public class DioramaClientTest implements FabricClientGameTest {
 	}
 
 	/**
+	 * A Cobblemon battle, with Cobblemon installed (opt-in: DIORAMA_TESTS=cobblemon). The player's
+	 * Pikachu takes on the nearest wild Pokémon, the way a thrown Poké Ball starts a battle: the
+	 * Rattata spawned beside them, or one that spawned on its own closer. Cobblemon's battle
+	 * screen and the battlers' tiles fill every corner, so the minimap stays out of the way, in
+	 * whichever corner it's set to, also once the battle screen is closed with the tiles still up,
+	 * and comes back when the battle ends (#147).
+	 */
+	private static void cobblemonBattle(ClientGameTestContext context, TestSingleplayerContext world) {
+		if (!context.computeOnClient(mc -> cobblemonClass("client.CobblemonClient") != null)) {
+			throw new AssertionError("DIORAMA_TESTS=cobblemon needs Cobblemon installed");
+		}
+		world.getServer().runCommand("gamemode survival @a");
+		world.getServer().runCommand("time set noon");
+		world.getServer().runCommand("execute as @a run pokegive pikachu level=50");
+		world.getServer().runCommand("execute as @a at @s run pokespawnat ~4 ~ ~ rattata level=2");
+		context.setScreen(() -> null);
+		settle(context, 40);
+		context.takeScreenshot("cobblemon-00-before");
+		world.getServer().runOnServer(server -> {
+			try {
+				net.minecraft.server.level.ServerPlayer player = server.getPlayerList().getPlayers().get(0);
+				Class<?> pokemonEntity = cobblemonClass("entity.pokemon.PokemonEntity");
+				net.minecraft.world.entity.Entity wild = player.level().getEntities((net.minecraft.world.entity.Entity) null,
+					player.getBoundingBox().inflate(16), pokemonEntity::isInstance).get(0);
+				Class<?> builder = cobblemonClass("battles.BattleBuilder");
+				for (java.lang.reflect.Method m : builder.getMethods()) {
+					if (m.getName().equals("pve") && m.getParameterCount() == 2) {
+						m.invoke(builder.getField("INSTANCE").get(null), player, wild);
+						return;
+					}
+				}
+				throw new AssertionError("No BattleBuilder.pve(player, pokemon)");
+			} catch (ReflectiveOperationException e) {
+				throw new AssertionError(e);
+			}
+		});
+		context.waitFor(mc -> inCobblemonBattle() && mc.gui.screen() != null && mc.gui.screen().getClass().getSimpleName().equals("BattleGUI"), 400);
+		// Past the battle screen's opening animation.
+		context.waitTicks(80);
+		Settings.Corner saved = context.computeOnClient(mc -> Settings.get().minimapCorner);
+		for (Settings.Corner corner : Settings.Corner.values()) {
+			context.runOnClient(mc -> Settings.get().minimapCorner = corner);
+			context.waitTicks(5);
+			context.takeScreenshot("cobblemon-01-battle-" + corner.name().toLowerCase(java.util.Locale.ROOT));
+		}
+		context.runOnClient(mc -> Settings.get().minimapCorner = saved);
+		// Closed with Esc, the battle screen leaves the battlers' tiles in the top corners.
+		context.runOnClient(mc -> mc.gui.screen().onClose());
+		context.waitTicks(20);
+		if (!context.computeOnClient(mc -> inCobblemonBattle())) {
+			throw new AssertionError("Closing the battle screen ended the battle");
+		}
+		context.takeScreenshot("cobblemon-02-battle-screen-closed");
+		// Cobblemon's command takes one player.
+		world.getServer().runCommand("stopbattle @p");
+		context.waitFor(mc -> !inCobblemonBattle(), 200);
+		context.setScreen(() -> null);
+		settle(context, 40);
+		context.takeScreenshot("cobblemon-03-after");
+		world.getServer().runCommand("gamemode creative @a");
+	}
+
+	private static boolean inCobblemonBattle() {
+		try {
+			Class<?> client = cobblemonClass("client.CobblemonClient");
+			return client.getMethod("getBattle").invoke(client.getField("INSTANCE").get(null)) != null;
+		} catch (ReflectiveOperationException e) {
+			throw new AssertionError(e);
+		}
+	}
+
+	private static @Nullable Class<?> cobblemonClass(String name) {
+		try {
+			return Class.forName("com.cobblemon.mod.common." + name);
+		} catch (ClassNotFoundException e) {
+			return null;
+		}
+	}
+
+	/**
+	 * Land claims from FTB Chunks, with FTB Chunks installed (opt-in: DIORAMA_TESTS=ftb-claims). The
+	 * player's team claims the chunks round the player, force loads the middle one, and a server
+	 * team claims chunks to the east. The map tints each claim in its team's colour on the ground it
+	 * covers: the top of a tower in the claim is tinted though it's drawn north of the claim's
+	 * ground, and the ground north of the claim isn't. Zoomed far out, and on the minimap, the claims
+	 * show too. Unclaiming takes the tint away.
+	 */
+	private static void ftbClaims(ClientGameTestContext context, TestSingleplayerContext world) {
+		if (!context.computeOnClient(mc -> dev.diorama.compat.FtbChunks.available())) {
+			throw new AssertionError("DIORAMA_TESTS=ftb-claims needs FTB Chunks installed");
+		}
+		// Two server teams claim the hills and village round spawn, side by side.
+		int spawnX = context.computeOnClient(mc -> mc.player.getBlockX());
+		int spawnY = context.computeOnClient(mc -> mc.player.getBlockY());
+		int spawnZ = context.computeOnClient(mc -> mc.player.getBlockZ());
+		world.getServer().runCommand("ftbteams server create Spawn");
+		world.getServer().runCommand("ftbteams server create Market");
+		// Commands name a team by its short name, its name and a piece of its id.
+		String spawn = ftbTeamShortName(world, "Spawn");
+		String market = ftbTeamShortName(world, "Market");
+		world.getServer().runCommand("ftbteams server settings " + spawn + " ftbteams:color #E04040");
+		world.getServer().runCommand("ftbteams server settings " + market + " ftbteams:color #3CB4E6");
+		world.getServer().runCommand("ftbchunks admin claim_as " + spawn + " 48 " + spawnX + " " + spawnZ);
+		world.getServer().runCommand("ftbchunks admin claim_as " + market + " 16 " + (spawnX + 80) + " " + spawnZ);
+		context.waitFor(mc -> Claims.get().at((spawnX + 80) >> 4, spawnZ >> 4) != null && Claims.get().at(spawnX >> 4, spawnZ >> 4) != null, 600);
+		openMapOnPlayer(context);
+		context.waitFor(mc -> claimsShown(new TileKey(TileKey.SURFACE, Math.floorDiv(spawnX, Projection.TILE_UNITS),
+			Math.floorDiv((int) Math.floor(Projection.v(spawnY, spawnZ)), Projection.TILE_UNITS))), 200);
+		settle(context, 20);
+		context.takeScreenshot("ftb-claims-00-spawn");
+		lookAtPlayer(context, 2.0, TileKey.SURFACE);
+		settle(context, 20);
+		context.takeScreenshot("ftb-claims-00-spawn-zoom-2");
+		// Turned off, the claims go, and the map is as it was without them.
+		context.runOnClient(mc -> Settings.get().claims = Settings.ClaimsShown.OFF);
+		context.waitTicks(5);
+		if (context.computeOnClient(mc -> !Claims.get().isEmpty())) {
+			throw new AssertionError("Claims still known with the setting off");
+		}
+		context.takeScreenshot("ftb-claims-00-spawn-zoom-2-off");
+		context.runOnClient(mc -> Settings.get().claims = Settings.ClaimsShown.ALWAYS);
+		context.waitFor(mc -> Claims.get().at(spawnX >> 4, spawnZ >> 4) != null, 600);
+		context.setScreen(() -> null);
+
+		// The middle of a chunk, on an open patch far from anything placed before.
+		int cx = -1792 + 8;
+		int cz = 1808 + 8;
+		int x0 = cx - 56;
+		int z0 = cz - 40;
+		int x1 = cx + 88;
+		int z1 = cz + 40;
+		world.getServer().runCommand("forceload add " + x0 + " " + z0 + " " + x1 + " " + z1);
+		world.getServer().runCommand("tp @a " + cx + " 200 " + cz);
+		context.waitFor(mc -> mc.player.blockPosition().getX() == cx, 200);
+		context.waitTicks(60);
+		// A grass platform over whatever is there, water included, with clear air above it.
+		int y = Math.max(72, world.getServer().computeOnServer(server -> server.overworld().getHeight(Heightmap.Types.MOTION_BLOCKING, cx, cz)));
+		// Fill takes at most 32768 blocks at once: a chunk's column at a time.
+		for (int x = x0; x <= x1; x += 16) {
+			for (int z = z0; z <= z1; z += 16) {
+				int xe = Math.min(x1, x + 15);
+				int ze = Math.min(z1, z + 15);
+				world.getServer().runCommand("fill " + x + " " + y + " " + z + " " + xe + " " + (y + 60) + " " + ze + " air");
+				world.getServer().runCommand("fill " + x + " " + (y - 1) + " " + z + " " + xe + " " + (y - 1) + " " + ze + " grass_block");
+			}
+		}
+		// A tower in the claim's north-west chunk, whose top the map draws well north of its foot.
+		int towerX = cx - 16;
+		int towerZ = cz - 16;
+		int top = y + 23;
+		world.getServer().runCommand("fill " + (towerX - 3) + " " + y + " " + (towerZ - 3) + " " + (towerX + 2) + " " + top + " " + (towerZ + 2) + " stone_bricks");
+		world.getServer().runCommand("tp @a " + cx + " " + y + " " + cz);
+		world.getServer().runCommand("time set noon");
+		context.waitFor(mc -> mc.player.blockPosition().getX() == cx && mc.player.onGround(), 600);
+		settle(context, 60);
+
+		world.getServer().runCommand("execute as @a at @s run ftbchunks claim 16");
+		world.getServer().runCommand("execute as @a at @s run ftbchunks load");
+		world.getServer().runCommand("ftbchunks admin claim_as " + spawn + " 16 " + (cx + 64) + " " + cz);
+		int playerChunkX = cx >> 4;
+		int playerChunkZ = cz >> 4;
+		long claimed = System.nanoTime();
+		for (int tick = 0; ; tick++) {
+			boolean all = context.computeOnClient(mc -> {
+				Claims.Snapshot claims = Claims.get();
+				return claims.at(playerChunkX - 1, playerChunkZ - 1) != null && claims.at(playerChunkX + 4, playerChunkZ) != null
+					&& claims.at(playerChunkX, playerChunkZ) != null && claims.at(playerChunkX, playerChunkZ).forceLoaded();
+			});
+			if (all) {
+				break;
+			}
+			if (tick > 600) {
+				String seen = context.computeOnClient(mc -> "own " + Claims.get().at(playerChunkX - 1, playerChunkZ - 1)
+					+ ", middle " + Claims.get().at(playerChunkX, playerChunkZ) + ", Spawn's " + Claims.get().at(playerChunkX + 4, playerChunkZ));
+				throw new AssertionError("The claims didn't all reach the map: " + seen);
+			}
+			context.waitTick();
+		}
+		Diorama.LOGGER.info("FTB claims reached the map's claims {} ms after the commands", (System.nanoTime() - claimed) / 1_000_000);
+		Claims.Claim own = context.computeOnClient(mc -> Claims.get().at(playerChunkX + 1, playerChunkZ + 1));
+		Claims.Claim server = context.computeOnClient(mc -> Claims.get().at(playerChunkX + 4, playerChunkZ));
+		if (own == null || server == null || own.team().equals(server.team()) || server.rgb() != 0xE04040 || !"Spawn".equals(server.name())) {
+			throw new AssertionError("Expected the player's claim and Spawn's red claim: " + own + ", " + server);
+		}
+		if (context.computeOnClient(mc -> Claims.get().at(playerChunkX - 2, playerChunkZ)) != null) {
+			throw new AssertionError("A chunk outside both claims shows as claimed");
+		}
+		settle(context, 40);
+
+		// The tower's top is in the claim; the ground just north of the claim isn't, though a ray
+		// at its row crosses the claim lower down.
+		int claimNorth = (playerChunkZ - 1) << 4;
+		assertClaimTint(context, towerX + 0.5, top + 1, towerZ + 0.5, true, "the tower's top");
+		assertClaimTint(context, cx + 0.5, y, claimNorth - 3 + 0.5, false, "the ground north of the claim");
+		assertClaimTint(context, cx + 0.5, y, cz + 0.5, true, "the ground under the player");
+		assertClaimTint(context, cx + 64 + 0.5, y, cz + 0.5, true, "Spawn's ground");
+		assertClaimTint(context, cx + 30 + 0.5, y, cz + 0.5, false, "the ground between the claims");
+
+		openMapOnPlayer(context);
+		context.waitFor(mc -> claimsShown(new TileKey(TileKey.SURFACE, Math.floorDiv(cx, Projection.TILE_UNITS),
+			Math.floorDiv((int) Math.floor(Projection.v(y, cz)), Projection.TILE_UNITS))), 200);
+		context.takeScreenshot("ftb-claims-01-map");
+		lookAtPlayer(context, 1.0, TileKey.SURFACE);
+		settle(context, 20);
+		context.takeScreenshot("ftb-claims-02-map-zoom-1");
+		// Hovering a claimed spot names its owner.
+		lookAtPlayer(context, 4.0, TileKey.SURFACE);
+		settle(context, 10);
+		double[] spot = mapPoint(context, 60, 2);
+		moveCursor(context, spot[2], spot[3]);
+		context.waitTicks(10);
+		context.takeScreenshot("ftb-claims-03-hover");
+
+		// Far out the map shows overview tiles, which carry their own chunks once rebuilt. Back
+		// over spawn, which has more mapped round it.
+		context.waitTicks(200);
+		double[] far = {0.35, 0.12};
+		for (int i = 0; i < far.length; i++) {
+			double zoom = far[i];
+			context.runOnClient(mc -> ((MapScreen) mc.gui.screen()).lookAt(spawnX, Projection.v(spawnY, spawnZ), zoom, TileKey.SURFACE));
+			// The view the screen reports is the one it last drew.
+			context.waitTicks(3);
+			int lod = context.computeOnClient(mc -> MapViewport.lodFor(MapSession.get().map(), ((MapScreen) mc.gui.screen()).view()));
+			if (lod == 0) {
+				throw new AssertionError("Zoomed out to " + zoom + ", the map should show overview tiles");
+			}
+			TileKey overview = new TileKey(TileKey.SURFACE, Math.floorDiv(spawnX, Projection.TILE_UNITS << lod),
+				Math.floorDiv((int) Math.floor(Projection.v(spawnY, spawnZ)), Projection.TILE_UNITS << lod), lod);
+			context.waitFor(mc -> claimsShown(overview), 600);
+			settle(context, 20);
+			context.takeScreenshot("ftb-claims-04-map-far-lod" + lod);
+			if (i == far.length - 1) {
+				// A map saved before overview tiles kept their chunks: the claims go, and come back
+				// once the tiles under it are rebuilt.
+				MapLevel level = context.computeOnClient(mc -> MapSession.get().map());
+				level.forgetChunks(overview);
+				context.waitFor(mc -> !claimsShown(overview), 200);
+				context.waitFor(mc -> claimsShown(overview), 1200);
+				context.takeScreenshot("ftb-claims-04-map-far-migrated");
+			}
+		}
+		context.setScreen(() -> null);
+		context.waitTicks(20);
+		context.takeScreenshot("ftb-claims-05-minimap");
+
+		// Unclaiming takes the tint away.
+		world.getServer().runCommand("execute as @a at @s run ftbchunks unload");
+		world.getServer().runCommand("execute as @a at @s run ftbchunks unclaim 16");
+		long unclaimed = System.nanoTime();
+		context.waitFor(mc -> Claims.get().at(playerChunkX, playerChunkZ) == null, 600);
+		Diorama.LOGGER.info("FTB unclaim reached the map's claims {} ms after the command", (System.nanoTime() - unclaimed) / 1_000_000);
+		assertClaimTint(context, cx + 0.5, y, cz + 0.5, false, "the ground under the player after unclaiming");
+		assertClaimTint(context, cx + 64 + 0.5, y, cz + 0.5, true, "Spawn's ground after the player unclaimed");
+		openMapOnPlayer(context);
+		context.waitTicks(40);
+		context.takeScreenshot("ftb-claims-06-unclaimed");
+		context.setScreen(() -> null);
+		world.getServer().runCommand("ftbchunks admin unclaim_as " + spawn + " 16 " + (cx + 64) + " " + cz);
+		world.getServer().runCommand("forceload remove " + x0 + " " + z0 + " " + x1 + " " + z1);
+
+		// What a big server costs: 65 by 65 claimed chunks next to the player, arriving at once.
+		// Claims are taken in on the client tick; painting a tile runs on a baker thread.
+		context.runOnClient(mc -> Claims.resetSlowestTick());
+		world.getServer().runCommand("ftbchunks admin claim_as " + market + " 512 " + (cx - 600) + " " + cz);
+		context.waitFor(mc -> Claims.get().at((cx - 600) >> 4, cz >> 4) != null && Claims.get().at((cx - 1100) >> 4, (cz + 500) >> 4) != null, 1200);
+		context.waitTicks(200);
+		String parts = context.computeOnClient(mc -> Claims.slowestTickParts());
+		long slowest = context.computeOnClient(mc -> Claims.resetSlowestTick());
+		int nearby = context.computeOnClient(mc -> {
+			int n = 0;
+			for (int x = ((cx - 600) >> 4) - 40; x <= ((cx - 600) >> 4) + 40; x++) {
+				for (int z = (cz >> 4) - 40; z <= (cz >> 4) + 40; z++) {
+					n += Claims.get().at(x, z) != null ? 1 : 0;
+				}
+			}
+			return n;
+		});
+		TileKey here = new TileKey(TileKey.SURFACE, Math.floorDiv(cx, Projection.TILE_UNITS), Math.floorDiv((int) Math.floor(Projection.v(y, cz)), Projection.TILE_UNITS));
+		long paint = context.computeOnClient(mc -> {
+			MapSession.get().map().claimPixels(here);
+			long t = System.nanoTime();
+			MapSession.get().map().claimPixels(here);
+			return System.nanoTime() - t;
+		});
+		Diorama.LOGGER.info("FTB claims cost: {} chunks claimed nearby, slowest tick spent on claims {} us while they arrived ({}), painting one tile {} ms",
+			nearby, slowest / 1000, parts, paint / 1_000_000);
+		world.getServer().runCommand("ftbchunks admin unclaim_as " + market + " 512 " + (cx - 600) + " " + cz);
+
+		// Deleting a server team sends no update for its chunks; its claims go all the same.
+		world.getServer().runCommand("ftbteams server delete " + spawn);
+		context.waitFor(mc -> Claims.get().at(spawnX >> 4, spawnZ >> 4) == null, 400);
+		// Let the server finish with the deleted team before the world closes.
+		settle(context, 20);
+	}
+
+	/** The short name FTB Teams' commands know a team by, from its display name. */
+	private static String ftbTeamShortName(TestSingleplayerContext world, String name) {
+		return world.getServer().computeOnServer(server -> {
+			try {
+				Object api = Class.forName("dev.ftb.mods.ftbteams.api.FTBTeamsAPI").getMethod("api").invoke(null);
+				Object manager = api.getClass().getMethod("getManager").invoke(api);
+				for (Object team : (java.util.Collection<?>) manager.getClass().getMethod("getTeams").invoke(manager)) {
+					String shortName = (String) team.getClass().getMethod("getShortName").invoke(team);
+					if (shortName.equals(name) || shortName.startsWith(name + "#")) {
+						return shortName;
+					}
+				}
+			} catch (ReflectiveOperationException e) {
+				throw new AssertionError("Couldn't look up FTB Teams' teams", e);
+			}
+			throw new AssertionError("No FTB team named " + name);
+		});
+	}
+
+	/** Whether the map has painted claims over a tile it shows. */
+	private static boolean claimsShown(TileKey key) {
+		MapTile tile = MapSession.get().map().peek(key);
+		return tile != null && tile.claims() != null;
+	}
+
+	/** Checks whether the map tints the top of the block at a spot ({@code y} is the height of its top face) as claimed. */
+	private static void assertClaimTint(ClientGameTestContext context, double x, double y, double z, boolean claimed, String what) {
+		double v = Projection.v(y, z);
+		TileKey key = new TileKey(TileKey.SURFACE, Math.floorDiv((int) Math.floor(x), Projection.TILE_UNITS), Math.floorDiv((int) Math.floor(v), Projection.TILE_UNITS));
+		int px = (int) Math.floor((x - key.minU()) * Projection.PIXELS_PER_UNIT);
+		int py = (int) Math.floor((v - key.minV()) * Projection.PIXELS_PER_UNIT);
+		int pixel = context.computeOnClient(mc -> {
+			int[] pixels = MapSession.get().map().claimPixels(key);
+			return pixels == null ? 0 : pixels[py * Projection.TILE_PIXELS + px];
+		});
+		if ((pixel >>> 24 != 0) != claimed) {
+			throw new AssertionError("Expected " + what + " " + (claimed ? "tinted as claimed" : "untinted") + ", pixel " + Integer.toHexString(pixel));
+		}
+	}
+
+	/**
 	 * After rejoining, the server sends the hidden waystone again, and it is still hidden. It sends
 	 * the picked-up one too, from where it stood, and that one stays off until it's placed again
 	 * on the same spot.
@@ -3918,9 +4815,18 @@ public class DioramaClientTest implements FabricClientGameTest {
 		context.setScreen(() -> new net.minecraft.client.gui.screens.inventory.InventoryScreen(Minecraft.getInstance().player));
 		settle(context, 20);
 		context.takeScreenshot("screens-02-inventory");
+		// Under any screen, the minimap steps aside, the pause menu too (#147)...
 		context.setScreen(() -> new net.minecraft.client.gui.screens.PauseScreen(true));
 		settle(context, 20);
 		context.takeScreenshot("screens-03-pause");
+		// ...but not chat, which leaves the corners alone.
+		//? if >=1.21.9 {
+		context.setScreen(() -> new net.minecraft.client.gui.screens.ChatScreen("", false));
+		//?} else {
+		/*context.setScreen(() -> new net.minecraft.client.gui.screens.ChatScreen(""));
+		*///?}
+		settle(context, 20);
+		context.takeScreenshot("screens-03-chat");
 		context.setScreen(() -> null);
 		// F3's debug screen fills both top corners; the minimap steps out of its way, and comes back.
 		context.runOnClient(DioramaClientTest::toggleDebugScreen);
@@ -3932,11 +4838,70 @@ public class DioramaClientTest implements FabricClientGameTest {
 		world.getServer().runCommand("gamemode creative @a");
 	}
 
+	/**
+	 * The enlarge key (#153), bound by the player since it starts unbound: held, the minimap grows
+	 * to the Enlarged size in its own corner, and stops at what fits the screen; let go, it's back
+	 * to its size.
+	 */
+	private static void enlarge(ClientGameTestContext context) {
+		context.setScreen(() -> null);
+		int[] saved = context.computeOnClient(mc -> new int[] {Settings.get().minimapEnlarged, Settings.get().minimapCorner.ordinal()});
+		context.runOnClient(mc -> {
+			DioramaClient.ENLARGE_MINIMAP.setKey(InputConstants.getKey("key.keyboard.z"));
+			net.minecraft.client.KeyMapping.resetMapping();
+		});
+		settle(context, 20);
+		context.takeScreenshot("enlarge-01-normal");
+		context.getInput().holdKey(DioramaClient.ENLARGE_MINIMAP);
+		context.waitTicks(2);
+		if (!context.computeOnClient(mc -> DioramaClient.ENLARGE_MINIMAP.isDown())) {
+			throw new AssertionError("Holding the enlarge key didn't reach its key mapping");
+		}
+		settle(context, 40);
+		context.takeScreenshot("enlarge-02-200");
+		for (int percent : new int[] {150, 325, 400}) {
+			context.runOnClient(mc -> Settings.get().minimapEnlarged = percent);
+			settle(context, 20);
+			context.takeScreenshot("enlarge-03-" + percent);
+		}
+		// On a tall, narrow window, 4x is wider than the screen: it stops at the screen's width.
+		context.getInput().resizeWindow(360, 900);
+		settle(context, 20);
+		context.takeScreenshot("enlarge-03-400-narrow");
+		context.getInput().resizeWindow(1600, 900);
+		context.runOnClient(mc -> Settings.get().minimapEnlarged = 200);
+		for (Settings.Corner corner : Settings.Corner.values()) {
+			context.runOnClient(mc -> Settings.get().minimapCorner = corner);
+			settle(context, 20);
+			context.takeScreenshot("enlarge-04-" + corner.name().toLowerCase(java.util.Locale.ROOT));
+		}
+		context.runOnClient(mc -> Settings.get().minimapCorner = Settings.Corner.TOP_RIGHT);
+		context.getInput().releaseKey(DioramaClient.ENLARGE_MINIMAP);
+		context.waitTicks(5);
+		if (context.computeOnClient(mc -> DioramaClient.ENLARGE_MINIMAP.isDown())) {
+			throw new AssertionError("Letting go of the enlarge key didn't reach its key mapping");
+		}
+		context.takeScreenshot("enlarge-05-released");
+		// The Enlarged slider sits beside Size, so the Minimap tab is no taller.
+		context.setScreen(() -> new SettingsScreen(null));
+		settle(context, 10);
+		context.takeScreenshot("enlarge-06-settings");
+		context.setScreen(() -> null);
+		context.runOnClient(mc -> {
+			Settings.get().minimapEnlarged = saved[0];
+			Settings.get().minimapCorner = Settings.Corner.values()[saved[1]];
+			DioramaClient.ENLARGE_MINIMAP.setKey(InputConstants.UNKNOWN);
+			net.minecraft.client.KeyMapping.resetMapping();
+		});
+	}
+
 	private static void toggleDebugScreen(Minecraft mc) {
 		//? if >=1.21.9 {
 		mc.debugEntries.toggleDebugOverlay();
-		//?} else {
+		//?} else if >=1.21 {
 		/*mc.getDebugOverlay().toggleOverlay();
+		*///?} else {
+		/*mc.options.renderDebug = !mc.options.renderDebug;
 		*///?}
 	}
 
@@ -4138,6 +5103,25 @@ public class DioramaClientTest implements FabricClientGameTest {
 		if (clickedSize != Settings.MAX_SIZE) {
 			throw new AssertionError("Clicking the right end of the Size slider set " + clickedSize + ", not " + Settings.MAX_SIZE);
 		}
+		// The faintest minimap: the preview's map and fog fade, and the frame is a border around the game behind it.
+		clickAt(context, "Opacity: ", 0.0);
+		int clickedOpacity = context.computeOnClient(mc -> Settings.get().minimapOpacity);
+		if (clickedOpacity != Settings.MIN_OPACITY) {
+			throw new AssertionError("Clicking the left end of the Opacity slider set " + clickedOpacity + ", not " + Settings.MIN_OPACITY);
+		}
+		context.getInput().setCursorPos(0, 0);
+		context.waitTicks(3);
+		context.takeScreenshot("settings-02-opacity-" + clickedOpacity);
+		// Round, the frame is a ring around the faded map, not a disc behind it.
+		click(context, "Shape: ");
+		context.getInput().setCursorPos(0, 0);
+		context.waitTicks(3);
+		context.takeScreenshot("settings-02-opacity-" + clickedOpacity + "-round");
+		click(context, "Shape: ");
+		context.runOnClient(mc -> {
+			Settings.get().minimapOpacity = Settings.MAX_OPACITY;
+			Settings.get().save();
+		});
 		// The biggest minimap, switched off: the dimmed preview stops at the settings' edge.
 		click(context, "Minimap", 0.05);
 		context.getInput().setCursorPos(0, 0);
@@ -4199,14 +5183,15 @@ public class DioramaClientTest implements FabricClientGameTest {
 		context.runOnClient(mc -> {
 			java.nio.file.Path file = mc.gameDirectory.toPath().resolve("diorama").resolve("config.json");
 			try {
-				java.nio.file.Files.writeString(file, "{\"minimapZoom\": -1, \"radarRange\": -1}");
+				java.nio.file.Files.writeString(file, "{\"minimapZoom\": -1, \"radarRange\": -1, \"minimapOpacity\": 3}");
 			} catch (java.io.IOException e) {
 				throw new AssertionError(e);
 			}
 			Settings s = Settings.reload();
-			if (s.minimapZoom != 0 || s.radarRange != Settings.RANGES[0]) {
-				throw new AssertionError("Bad numbers weren't fixed on load: zoom " + s.minimapZoom + ", range " + s.radarRange);
+			if (s.minimapZoom != 0 || s.radarRange != Settings.RANGES[0] || s.minimapOpacity != Settings.MIN_OPACITY) {
+				throw new AssertionError("Bad numbers weren't fixed on load: zoom " + s.minimapZoom + ", range " + s.radarRange + ", opacity " + s.minimapOpacity);
 			}
+			s.minimapOpacity = Settings.MAX_OPACITY;
 			s.minimapZoom = 3;
 			s.radarRange = 32;
 			s.save();
@@ -4224,6 +5209,10 @@ public class DioramaClientTest implements FabricClientGameTest {
 				Settings s = Settings.reload();
 				if (s.minimapSize != Integer.parseInt(size[1]) || s.minimapCorner != Settings.Corner.BOTTOM_LEFT || s.compass) {
 					throw new AssertionError("A saved size of " + size[0] + " loaded as " + s.minimapSize + " (corner " + s.minimapCorner + ", compass " + s.compass + ")");
+				}
+				// Files from before the Opacity setting have none, and keep the solid map they had.
+				if (s.minimapOpacity != Settings.MAX_OPACITY) {
+					throw new AssertionError("A saved file with no opacity loaded as " + s.minimapOpacity + ", not " + Settings.MAX_OPACITY);
 				}
 			});
 		}
@@ -4327,6 +5316,113 @@ public class DioramaClientTest implements FabricClientGameTest {
 		return MapSession.get().map().peek(new TileKey(TileKey.SURFACE, tu, tv));
 	}
 
+	/**
+	 * Waypoints in the world are part of the picture of the world: the inventory, opened with Home
+	 * in view, the hotbar, and the chat box all cover them.
+	 */
+	private static void waypointsUnderTheGui(ClientGameTestContext context) {
+		context.setScreen(() -> new net.minecraft.client.gui.screens.inventory.InventoryScreen(Minecraft.getInstance().player));
+		context.waitTicks(5);
+		context.takeScreenshot("waypoints-02b-under-inventory");
+		context.setScreen(() -> null);
+
+		// One pin standing on the hotbar, and one on chat lines, with the chat closed.
+		Waypoint low = waypointOnScreen(context, "Low", Waypoint.PALETTE[3], 0.5, -8);
+		context.runOnClient(mc -> {
+			for (int i = 1; i <= 3; i++) {
+				//? if >=26.1 {
+				mc.player.sendSystemMessage(net.minecraft.network.chat.Component.literal("Chat line " + i + " over a waypoint"));
+				//?} else {
+				/*mc.player.displayClientMessage(net.minecraft.network.chat.Component.literal("Chat line " + i + " over a waypoint"), false);
+				*///?}
+			}
+		});
+		Waypoint chat = waypointOnScreen(context, "Chat", Waypoint.PALETTE[7], 60, -48);
+		context.takeScreenshot("waypoints-02c-under-hotbar");
+		//? if >=1.21.9 {
+		context.setScreen(() -> new net.minecraft.client.gui.screens.ChatScreen("", false));
+		//?} else {
+		/*context.setScreen(() -> new net.minecraft.client.gui.screens.ChatScreen(""));
+		*///?}
+		context.waitTicks(5);
+		context.takeScreenshot("waypoints-02d-under-chat");
+		context.setScreen(() -> null);
+		// The totem animation, which the frame draws before the HUD before 26.3.
+		Waypoint totem = waypointOnScreen(context, "Totem", Waypoint.PALETTE[1], 0.5, 0.55);
+		//? if >=26.3 {
+		context.runOnClient(mc -> mc.player.displayItemActivation(new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.TOTEM_OF_UNDYING)));
+		//?} else {
+		/*context.runOnClient(mc -> mc.gameRenderer.displayItemActivation(new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.TOTEM_OF_UNDYING)));
+		*///?}
+		context.waitTicks(8);
+		context.takeScreenshot("waypoints-02e-under-totem");
+		context.waitTicks(40);
+		// F1 hides them with the rest of the HUD.
+		//? if >=26.2 {
+		context.runOnClient(mc -> mc.gui.hud.toggle());
+		//?} else {
+		/*context.runOnClient(mc -> mc.options.hideGui = true);
+		*///?}
+		context.waitTicks(2);
+		context.takeScreenshot("waypoints-02f-hidden-hud");
+		//? if >=26.2 {
+		context.runOnClient(mc -> mc.gui.hud.toggle());
+		//?} else {
+		/*context.runOnClient(mc -> mc.options.hideGui = false);
+		*///?}
+		context.runOnClient(mc -> {
+			WaypointStore.get().remove(low);
+			WaypointStore.get().remove(chat);
+			WaypointStore.get().remove(totem);
+		});
+	}
+
+	/**
+	 * Adds a waypoint 24 blocks ahead whose pin stands on the given GUI point with the player looking
+	 * level. Below 1, x and y are fractions of the width and height; a negative y counts up from the
+	 * bottom edge.
+	 */
+	private static Waypoint waypointOnScreen(ClientGameTestContext context, String name, int color, double x, double y) {
+		Waypoint waypoint = context.computeOnClient(mc -> {
+			mc.player.setXRot(0);
+			mc.player.xRotO = 0;
+			double width = mc.getWindow().getGuiScaledWidth();
+			double height = mc.getWindow().getGuiScaledHeight();
+			double guiX = x < 1 ? x * width : x;
+			double guiY = y < 0 ? height + y : y < 1 ? y * height : y;
+			net.minecraft.world.phys.Vec3 eye = mc.player.getEyePosition();
+			net.minecraft.world.phys.Vec3 look = mc.player.getLookAngle();
+			double distance = 24;
+			// Blocks per GUI pixel at that distance; the field of view is the vertical one.
+			double scale = distance * Math.tan(Math.toRadians(mc.options.fov().get() / 2.0)) / (height / 2);
+			double right = (guiX - width / 2) * scale;
+			double up = (height / 2 - guiY) * scale;
+			// Screen right is look cross up; the pin stands on the middle of the block's top.
+			double wx = eye.x + look.x * distance - look.z * right;
+			double wz = eye.z + look.z * distance + look.x * right;
+			Waypoint placed = new Waypoint(name, (int) Math.floor(wx), (int) Math.round(eye.y + up - 1.0), (int) Math.floor(wz),
+				mc.level.dimension().identifier().toString(), color);
+			WaypointStore.get().add(placed);
+			return placed;
+		});
+		context.waitTicks(5);
+		String missed = context.computeOnClient(mc -> {
+			float width = mc.getWindow().getGuiScaledWidth();
+			float height = mc.getWindow().getGuiScaledHeight();
+			double guiX = x < 1 ? x * width : x;
+			double guiY = y < 0 ? height + y : y < 1 ? y * height : y;
+			float[] at = WorldProjection.project(waypoint.x + 0.5, waypoint.y + 1.0, waypoint.z + 0.5, width, height);
+			if (at == null || Math.abs(at[0] - guiX) > 12 || Math.abs(at[1] - guiY) > 12) {
+				return at == null ? "behind the camera" : at[0] + "," + at[1] + " instead of " + guiX + "," + guiY;
+			}
+			return null;
+		});
+		if (missed != null) {
+			throw new AssertionError("The " + name + " waypoint isn't where the test put it: " + missed);
+		}
+		return waypoint;
+	}
+
 	/** Which scenarios to run: DIORAMA_TESTS=tour,radar,... (default: all but styles). */
 	private static Set<String> selectedTests() {
 		String env = System.getenv("DIORAMA_TESTS");
@@ -4335,10 +5431,10 @@ public class DioramaClientTest implements FabricClientGameTest {
 		}
 		if (env == null || env.isBlank()) {
 			//? if >=1.21.4 && fabric {
-			return Set.of("tour", "radar", "xaero-icons", "model-faces", "waypoints", "xaero-import", "fog-of-war", "settings", "overlays", "screens", "dimensions", "saved-map", "recreated-world", "multiplayer", "server-id", "tracked-players", "realms");
+			return Set.of("tour", "radar", "xaero-icons", "model-faces", "waypoints", "icons", "xaero-import", "fog-of-war", "settings", "overlays", "screens", "enlarge", "image-export", "dimensions", "saved-map", "recreated-world", "sub-maps", "multiplayer", "server-id", "tracked-players", "realms");
 			//?} else {
 			/*// On NeoForge and before 1.21.4 the tests run on src/gameshim, which can't start a dedicated server.
-			return Set.of("tour", "radar", "xaero-icons", "model-faces", "waypoints", "xaero-import", "fog-of-war", "settings", "overlays", "screens", "dimensions", "saved-map", "recreated-world");
+			return Set.of("tour", "radar", "xaero-icons", "model-faces", "waypoints", "icons", "xaero-import", "fog-of-war", "settings", "overlays", "screens", "enlarge", "image-export", "dimensions", "saved-map", "recreated-world", "sub-maps");
 			*///?}
 		}
 		return Set.of(env.split(","));

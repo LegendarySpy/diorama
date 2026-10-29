@@ -2,11 +2,15 @@ package dev.diorama;
 
 import dev.diorama.bake.BlockLooks;
 import dev.diorama.bake.MapPick;
+import dev.diorama.drawing.DrawMode;
+import dev.diorama.drawing.DrawingStore;
 import dev.diorama.bake.Overlays;
 import dev.diorama.bake.TileKey;
 import dev.diorama.bake.TileSpots;
+import dev.diorama.render.MapLevel;
 import dev.diorama.render.MapViewport;
 import dev.diorama.render.Markers;
+import dev.diorama.render.Pins;
 import dev.diorama.render.Radar;
 import dev.diorama.waypoint.Waypoint;
 import dev.diorama.waypoint.WaypointEditScreen;
@@ -41,6 +45,7 @@ import net.minecraft.client.input.KeyEvent;
 import net.minecraft.client.input.MouseButtonEvent;
 //?}
 import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.network.chat.CommonComponents;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
 import net.minecraft.sounds.SoundEvents;
@@ -65,12 +70,17 @@ public final class MapScreen extends Screen {
 	private static final int BAR = 16;
 	private static final int BOTTOM_BAR = 14;
 	private static final Component HELP = Component.translatable("diorama.map.help");
+	private static final String STATUS_GAP = "   ·   ";
 	/** One press of a zoom button: two notches of the mouse wheel. */
 	private static final int ZOOM_BUTTON_STEPS = 2;
 	private static final Identifier TAB = Identifier.withDefaultNamespace("widget/tab");
 	private static final Identifier TAB_HIGHLIGHTED = Identifier.withDefaultNamespace("widget/tab_highlighted");
 	private static final Identifier TAB_SELECTED = Identifier.withDefaultNamespace("widget/tab_selected");
 	private static final Identifier TAB_SELECTED_HIGHLIGHTED = Identifier.withDefaultNamespace("widget/tab_selected_highlighted");
+	//? if <1.21 {
+	/*// 1.20.1's tab buttons draw all four looks from rows of one texture.
+	private static final Identifier TAB_BUTTON = Identifier.withDefaultNamespace("textures/gui/tab_button.png");
+	*///?}
 	private static final Component[] TAB_NAMES = {Component.translatable("diorama.map.surface"), Component.translatable("diorama.map.caves")};
 
 	private final MapViewport viewport = new MapViewport();
@@ -95,13 +105,18 @@ public final class MapScreen extends Screen {
 	/** Whether the latest press went to a control (a button, a tab, the gauge), so it can't pan. */
 	private boolean pressOnControl;
 	private final DepthGauge gauge = new DepthGauge();
+	private Button export;
 	private Button zoomIn;
 	private Button zoomOut;
 	private Button recenter;
 	private Button sliceUp;
 	private Button sliceDown;
+	private Button mapsButton;
 	private Button waypointsButton;
 	private Button settingsButton;
+	/** Turns draw mode on and off; it sits above the zoom buttons. */
+	private Button drawButton;
+	private final DrawMode draw = new DrawMode();
 	/** The tabs' left edges and widths as drawn last frame, and where the status text starts. */
 	private final int[] tabX = new int[2];
 	private final int[] tabWidth = new int[2];
@@ -132,10 +147,30 @@ public final class MapScreen extends Screen {
 		this.pressButton = -1;
 		this.pressOnMenu = false;
 		this.pressOnControl = false;
+		Settings settings = Settings.get();
+		// Any of them can be hidden; the ones shown sit together in the corner, Settings last.
+		this.mapsButton = this.addRenderableWidget(Button.builder(Component.translatable("diorama.map.maps"), b ->
+			this.minecraft.gui.setScreen(new MapsScreen(this))).size(64, BAR).build());
+		this.mapsButton.visible = settings.mapMapsButton;
+		this.mapsButton.active = Maps.get() != null;
 		this.waypointsButton = this.addRenderableWidget(Button.builder(Component.translatable("diorama.map.waypoints"), b ->
-			this.minecraft.gui.setScreen(new WaypointListScreen(this))).bounds(this.width - 130, 0, 64, BAR).build());
+			this.minecraft.gui.setScreen(new WaypointListScreen(this))).size(64, BAR).build());
+		this.waypointsButton.visible = settings.mapWaypointsButton;
 		this.settingsButton = this.addRenderableWidget(Button.builder(Component.translatable("diorama.settings.button"), b ->
-			this.minecraft.gui.setScreen(new SettingsScreen(this))).bounds(this.width - 64, 0, 64, BAR).build());
+			this.minecraft.gui.setScreen(new SettingsScreen(this))).size(64, BAR).build());
+		this.settingsButton.visible = settings.mapSettingsButton;
+		int right = this.width;
+		for (Button button : List.of(this.settingsButton, this.waypointsButton, this.mapsButton)) {
+			if (button.visible) {
+				right -= button.getWidth();
+				button.setPosition(right, 0);
+				right -= 2;
+			}
+		}
+		this.export = this.addRenderableWidget(Button.builder(Component.empty(), b -> {
+			this.menu = null;
+			this.minecraft.gui.setScreen(new ExportScreen(this, this.centerU, this.centerV, this.zoom, this.width, this.height));
+		}).size(20, 20).createNarration(n -> Component.translatable("diorama.export.title")).build());
 		this.zoomIn = this.addRenderableWidget(Button.builder(Component.literal("+"), b -> this.zoomButton(ZOOM_BUTTON_STEPS))
 			.size(20, 20).createNarration(n -> Component.translatable("diorama.map.zoom_in")).build());
 		this.zoomOut = this.addRenderableWidget(Button.builder(Component.literal("-"), b -> this.zoomButton(-ZOOM_BUTTON_STEPS))
@@ -152,6 +187,11 @@ public final class MapScreen extends Screen {
 			this.menu = null;
 			this.shiftSlice(-DepthGauge.STEP, this.minecraft.player);
 		}).size(18, 14).createNarration(n -> Component.translatable("diorama.map.slice_down")).build());
+		this.drawButton = this.addRenderableWidget(Button.builder(Component.empty(), b -> {
+			this.menu = null;
+			this.draw.toggle();
+		}).size(20, 20).createNarration(n -> Component.translatable("diorama.draw.button")).build());
+		this.draw.init(this.font, this::addRenderableWidget, this::setFocused, (x, y) -> this.spotAt(x, y, false).thenApply(MapLevel.Spot::pos));
 		this.placeControls();
 	}
 
@@ -160,6 +200,11 @@ public final class MapScreen extends Screen {
 		boolean caves = this.layer != TileKey.SURFACE;
 		int x = this.width - (caves ? 56 : 26);
 		int y = this.height - 90;
+		this.drawButton.setPosition(x, y - 26);
+		// Only the sky view is saved, so only it can be exported; not while drawing on it.
+		MapSession session = MapSession.get();
+		this.export.visible = !caves && !this.draw.active() && session != null && session.map().savedMap() != null;
+		this.export.setPosition(x, y - 48);
 		this.zoomIn.setPosition(x, y);
 		this.zoomOut.setPosition(x, y + 22);
 		this.recenter.setPosition(x, y + 48);
@@ -174,9 +219,13 @@ public final class MapScreen extends Screen {
 		}
 	}
 
+	// No blurred, dimmed world behind the map. On 1.20.1 a screen draws no background unless it
+	// asks for one, so there's nothing to turn off.
+	//? if >=1.21 {
 	@Override
 	public void extractBackground(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float a) {
 	}
+	//?}
 
 	@Override
 	public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float a) {
@@ -185,6 +234,8 @@ public final class MapScreen extends Screen {
 			this.onClose();
 			return;
 		}
+		// The map can open before a server names its world, and the list of maps is the world's.
+		this.mapsButton.active = Maps.get() != null;
 		MapSession session = MapSession.get();
 		LocalPlayer player = this.minecraft.player;
 		if (session == null || player == null) {
@@ -200,12 +251,16 @@ public final class MapScreen extends Screen {
 		// Switching to a cave slice while zoomed far out comes back to the closest zoom it can show.
 		this.zoom = Math.max(this.minZoom(), this.zoom);
 		MapViewport.View view = new MapViewport.View(0, 0, this.width, this.height, this.centerU, this.centerV, this.zoom, this.layer);
-		this.viewport.draw(graphics, session.map(), view, overlayBits(session));
+		this.viewport.draw(graphics, session.map(), view, overlayBits(session), Settings.get().claims != Settings.ClaimsShown.OFF);
+		DrawingStore drawings = DrawingStore.get();
+		if (drawings != null && (this.draw.active() || Settings.get().drawings != Settings.DrawingsShown.OFF)) {
+			this.draw.drawMap(graphics, this.font, view, drawings.in(this.dimension()), mouseX, mouseY, !this.overControls(mouseX, mouseY));
+		}
 		boolean caves = this.layer != TileKey.SURFACE;
 		this.placeControls();
 		Radar.Blip hovered = null;
 		this.blips = List.of();
-		if (ServerRules.radarAllowed()) {
+		if (ServerRules.radarAllowed() && Settings.get().radarOnMap) {
 			this.blips = Radar.collect(view, a, true);
 			Radar.draw(graphics, view, this.blips, true, false);
 			hovered = Radar.under(this.blips, mouseX, mouseY);
@@ -221,9 +276,9 @@ public final class MapScreen extends Screen {
 			this.gauge.layout(this.minecraft.level, player.blockPosition(), this.layer, this.width, this.height);
 			this.sliceUp.setPosition(this.gauge.upButtonX(), this.gauge.upButtonY());
 			this.sliceDown.setPosition(this.gauge.upButtonX(), this.gauge.downButtonY());
-			// Its labels slide left of the zoom buttons rather than under them.
+			// Its labels slide left of the map's buttons (draw, zoom, recenter) rather than under them.
 			int avoidX = this.zoomIn.getX() - 3;
-			int avoidTop = this.zoomIn.getY() - 2;
+			int avoidTop = this.drawButton.getY() - 2;
 			int avoidBottom = this.recenter.getY() + this.recenter.getHeight() + 2;
 			//? if >=1.21.2 {
 			this.gauge.draw(graphics, this.font, pos.y, this.layer, avoidX, avoidTop, avoidBottom);
@@ -237,14 +292,23 @@ public final class MapScreen extends Screen {
 		// The tooltip is for a control under the mouse, else whatever is drawn on top: a player,
 		// then a waypoint, then a mob, then the spot itself. The menu covers them while it's open.
 		if (this.menu == null) {
-			if (this.overControls(mouseX, mouseY)) {
+			if (this.draw.active() && !this.overControls(mouseX, mouseY)) {
+				// Drawing: the map's own tooltips would sit on what's being drawn.
+			} else if (this.overControls(mouseX, mouseY)) {
 				Tip tip = this.controlTooltip(mouseX, mouseY);
 				if (tip != null) {
 					// Placed like a button's own tooltip: below the control, or above where there's no room.
 					//? if >=1.21.6 {
 					graphics.setTooltipForNextFrame(this.font, tip.lines(), new MenuTooltipPositioner(tip.control()), mouseX, mouseY, false);
-					//?} else {
+					//?} else if >=1.21 {
 					/*this.setTooltipForNextRenderPass(tip.lines(), new MenuTooltipPositioner(tip.control()), false);
+					*///?} else {
+					/*// 1.20.1's positioner takes a widget, of which it reads only the top and height, and
+					// the tabs aren't widgets: a button over the control stands in for it.
+					ScreenRectangle control = tip.control();
+					Button stand = Button.builder(Component.empty(), b -> {
+					}).bounds(control.left(), control.top(), control.width(), control.height()).build();
+					this.setTooltipForNextRenderPass(tip.lines(), new MenuTooltipPositioner(stand), false);
 					*///?}
 				}
 			} else if (hovered != null && hovered.kind() == Radar.Kind.PLAYER) {
@@ -264,13 +328,23 @@ public final class MapScreen extends Screen {
 		// The bars: tabs and status on top with the buttons, the mouse's ways in at the bottom.
 		graphics.fill(0, 0, this.width, BAR, 0x90000000);
 		this.drawTabs(graphics, mouseX, mouseY);
-		Component status = this.statusText(session, player, caves);
-		graphics.text(this.font, status.getString(), this.tabsEnd + 8, 4, 0xFFFFFFFF, false);
+		int statusX = this.tabsEnd + 8;
+		graphics.text(this.font, this.statusText(session, player, caves, this.buttonsStart() - 2 - statusX), statusX, 4, 0xFFFFFFFF, false);
 		graphics.fill(0, this.height - BOTTOM_BAR, this.width, this.height, 0x90000000);
-		graphics.text(this.font, HELP.getString(), 6, this.height - 11, 0xFFC8D0DA, false);
+		String help = (this.draw.active() ? this.draw.help() : HELP).getString();
+		graphics.text(this.font, help, 6, this.height - 11, 0xFFC8D0DA, false);
+		this.drawMapName(graphics, 6 + this.font.width(help) + 12);
 		// Widgets (the buttons) draw over the map, then the icons on them.
 		super.extractRenderState(graphics, mouseX, mouseY, a);
 		Markers.player(graphics, this.recenter.getX() + 10, this.recenter.getY() + 10.5F, 180, 5);
+		DrawMode.icon(graphics, DrawMode.PENCIL_ICON, this.drawButton.getX(), this.drawButton.getY(), 0xFFFFFFFF);
+		if (this.draw.active()) {
+			DrawMode.outline(graphics, this.drawButton.getX(), this.drawButton.getY(), 20, 20, 0xFFFFFFFF);
+		}
+		this.draw.drawControls(graphics);
+		if (this.export.visible) {
+			DrawMode.icon(graphics, PICTURE, this.export.getX(), this.export.getY(), 0xFFFFFFFF);
+		}
 		if (caves) {
 			this.caret(graphics, this.sliceUp, false);
 			this.caret(graphics, this.sliceDown, true);
@@ -291,19 +365,67 @@ public final class MapScreen extends Screen {
 		}
 	}
 
-	/** The status line: the player's position, the chunks mapped and whether baking is running. */
-	private static Component statusText(MapSession session, LocalPlayer player, boolean caves) {
-		Component mode = !caves && session.map().roofless()
-			? Component.translatable("diorama.map.under_roof").append("   ·   ")
-			: Component.empty();
-		Component chunks = Component.translatable("diorama.map.chunks", session.map().chunkCount());
-		Component baking = session.map().bakingCount() > 0
-			? Component.literal("   ·   ").append(Component.translatable("diorama.map.baking"))
-			: Component.empty();
-		return mode.copy()
-			.append(Component.literal(String.format("%d, %d, %d   ·   ", player.getBlockX(), player.getBlockY(), player.getBlockZ())))
-			.append(chunks)
-			.append(baking);
+	/**
+	 * The status line: whether the view is under the Nether's roof, the player's position, the
+	 * chunks mapped, whether baking is running and how far an image export is. It has {@code room} pixels before the buttons;
+	 * what doesn't fit is left out, the chunk count first, then baking, then the roof.
+	 */
+	private String statusText(MapSession session, LocalPlayer player, boolean caves, int room) {
+		String roof = !caves && session.map().roofless() ? Component.translatable("diorama.map.under_roof").getString() : null;
+		String position = String.format("%d, %d, %d", player.getBlockX(), player.getBlockY(), player.getBlockZ());
+		String chunks = Component.translatable("diorama.map.chunks", session.map().chunkCount()).getString();
+		String baking = session.map().bakingCount() > 0 ? Component.translatable("diorama.map.baking").getString() : null;
+		MapExport export = MapExport.running();
+		String saving = export != null ? Component.translatable("diorama.export.saving", Math.round(export.progress() * 100)).getString() : null;
+		List<String> parts = new ArrayList<>();
+		for (String part : new String[] {roof, position, chunks, baking, saving}) {
+			if (part != null) {
+				parts.add(part);
+			}
+		}
+		for (String dropped : new String[] {chunks, baking, roof}) {
+			if (this.font.width(String.join(STATUS_GAP, parts)) <= room) {
+				break;
+			}
+			parts.remove(dropped);
+		}
+		return this.font.plainSubstrByWidth(String.join(STATUS_GAP, parts), Math.max(0, room));
+	}
+
+	/**
+	 * The name of the dimension's map in use, at the right end of the bottom bar, once the dimension
+	 * has more than one. Shortened to fit after the help text, or left out if even a little won't.
+	 */
+	private void drawMapName(GuiGraphicsExtractor graphics, int left) {
+		Maps maps = Maps.get();
+		if (maps == null || this.minecraft.level == null) {
+			return;
+		}
+		String dimension = this.minecraft.level.dimension().identifier().toString();
+		if (!maps.several(dimension)) {
+			return;
+		}
+		String name = Component.translatable("diorama.map.current_map", maps.name(dimension, maps.active(dimension))).getString();
+		int room = this.width - 6 - left;
+		if (this.font.width(name) > room) {
+			String ellipsis = CommonComponents.ELLIPSIS.getString();
+			if (room < this.font.width(ellipsis) * 4) {
+				return;
+			}
+			name = this.font.plainSubstrByWidth(name, room - this.font.width(ellipsis)) + ellipsis;
+		}
+		graphics.text(this.font, name, this.width - 6 - this.font.width(name), this.height - 11, 0xFFFFFFFF, false);
+	}
+
+	/** Where the buttons at the top right start: the status line has to end before them. */
+	private int buttonsStart() {
+		int start = this.width;
+		for (Button button : List.of(this.mapsButton, this.waypointsButton, this.settingsButton)) {
+			if (button.visible) {
+				start = Math.min(start, button.getX());
+			}
+		}
+		return start;
 	}
 
 	// Mouse and key events came as separate numbers before 1.21.9. Each override hands them to a
@@ -311,6 +433,7 @@ public final class MapScreen extends Screen {
 	//? if >=1.21.9 {
 	@Override
 	public boolean mouseClicked(MouseButtonEvent event, boolean doubleClick) {
+		this.draw.anyPress(event.x(), event.y());
 		return this.menuPressed(event.x(), event.y(), event.button()) || this.clicked(super.mouseClicked(event, doubleClick), event.x(), event.y(), event.button());
 	}
 
@@ -332,6 +455,7 @@ public final class MapScreen extends Screen {
 	//?} else {
 	/*@Override
 	public boolean mouseClicked(double x, double y, int button) {
+		this.draw.anyPress(x, y);
 		return this.menuPressed(x, y, button) || this.clicked(super.mouseClicked(x, y, button), x, y, button);
 	}
 
@@ -398,6 +522,9 @@ public final class MapScreen extends Screen {
 		this.pressX = x;
 		this.pressY = y;
 		this.dragged = false;
+		if (this.draw.active() && this.lastView != null) {
+			this.draw.press(this.lastView, this.font, this.dimension(), x, y, button);
+		}
 		return true;
 	}
 
@@ -422,6 +549,10 @@ public final class MapScreen extends Screen {
 			if (!moved && button == InputConstants.MOUSE_BUTTON_LEFT && this.menu != null && this.menu.click(x, y)) {
 				this.menu = null;
 			}
+			return true;
+		}
+		if (this.draw.active() && !this.pressOnControl && this.lastView != null
+			&& this.draw.release(this.lastView, this.font, this.dimension(), x, y, button, moved)) {
 			return true;
 		}
 		if (moved) {
@@ -459,10 +590,10 @@ public final class MapScreen extends Screen {
 			this.menu = new MapMenu(this.waypointItems(pin.waypoint()), this.font, screenX, screenY, this.width, this.height);
 			return;
 		}
-		CompletableFuture<@Nullable BlockPos> spot = this.spotAt(screenX, screenY);
+		CompletableFuture<MapLevel.Spot> spot = this.spotAt(screenX, screenY, true);
 		try {
 			// Where the chunks are gone, the spot comes off the disk, usually in a few milliseconds.
-			BlockPos found = spot.get(SPOT_WAIT_MS, TimeUnit.MILLISECONDS);
+			MapLevel.Spot found = spot.get(SPOT_WAIT_MS, TimeUnit.MILLISECONDS);
 			this.menu = new MapMenu(this.spotItems(found), this.font, screenX, screenY, this.width, this.height);
 		} catch (TimeoutException e) {
 			// A slow disk: say so until it answers, unless the menu has been closed or replaced by then.
@@ -477,7 +608,7 @@ public final class MapScreen extends Screen {
 		} catch (InterruptedException e) {
 			Thread.currentThread().interrupt();
 		} catch (ExecutionException e) {
-			this.menu = new MapMenu(this.spotItems(null), this.font, screenX, screenY, this.width, this.height);
+			this.menu = new MapMenu(this.spotItems(MapLevel.Spot.NOTHING), this.font, screenX, screenY, this.width, this.height);
 		}
 	}
 
@@ -485,58 +616,62 @@ public final class MapScreen extends Screen {
 	private static final long SPOT_WAIT_MS = 50;
 
 	/**
-	 * Where a player would stand on the block shown under a screen point; null where the map has
-	 * nothing. Answered at once from the map's chunks; where they're gone, from the spots saved
-	 * with the tile, which takes a read off the render thread.
+	 * Where a player would stand on the block shown under a screen point. Answered at once from
+	 * the map's chunks; where they're gone, from the spots saved with the tile, which takes a read
+	 * off the render thread, or with {@code readWorld} from the world's save where the tile has none.
 	 */
-	private CompletableFuture<@Nullable BlockPos> spotAt(double screenX, double screenY) {
+	private CompletableFuture<MapLevel.Spot> spotAt(double screenX, double screenY, boolean readWorld) {
 		MapSession session = MapSession.get();
 		BlockLooks looks = BlockLooks.get();
 		MapViewport.View view = this.lastView;
 		if (session == null || looks == null || view == null) {
-			return CompletableFuture.completedFuture(null);
+			return CompletableFuture.completedFuture(MapLevel.Spot.NOTHING);
 		}
 		double u = view.centerU() + (screenX - view.x() - view.width() / 2.0) / view.zoom();
 		double v = TileSpots.rowMiddle(view.centerV() + (screenY - view.y() - view.height() / 2.0) / view.zoom());
 		TileKey tile = new TileKey(this.layer, (int) Math.floor(u / Projection.TILE_UNITS), (int) Math.floor(v / Projection.TILE_UNITS));
 		MapPick pick = new MapPick(session.map(), looks, tile, session.map().fogOfWar());
 		return switch (pick.pick(u, v)) {
-			case MapPick.FOUND -> CompletableFuture.completedFuture(new BlockPos((int) Math.floor(u), pick.y, pick.z));
-			case MapPick.NOTHING -> CompletableFuture.completedFuture(null);
-			default -> session.map().savedSpot(this.layer, u, v);
+			case MapPick.FOUND -> CompletableFuture.completedFuture(new MapLevel.Spot(new BlockPos((int) Math.floor(u), pick.y, pick.z), false));
+			case MapPick.NOTHING -> CompletableFuture.completedFuture(MapLevel.Spot.NOTHING);
+			default -> session.map().savedSpot(this.layer, u, v, looks, readWorld);
 		};
 	}
 
-	private List<MapMenu.Item> spotItems(@Nullable BlockPos spot) {
+	private List<MapMenu.Item> spotItems(MapLevel.Spot found) {
+		BlockPos spot = found.pos();
 		if (spot == null) {
-			return List.of(MapMenu.Item.info(Component.translatable("diorama.menu.not_mapped")));
+			// Drawn by Diorama 0.3.0 or older, with no save to read the ground from: it comes back when the player does.
+			return List.of(MapMenu.Item.info(Component.translatable(found.unsaved() ? "diorama.menu.not_saved" : "diorama.menu.not_mapped")));
 		}
 		int x = spot.getX();
 		int y = spot.getY();
 		int z = spot.getZ();
-		return List.of(
-			MapMenu.Item.info(this.where(x, y, z)),
-			MapMenu.Item.action(Component.translatable("diorama.menu.teleport_here"), Waypoints.canTeleport(), () -> {
-				Waypoints.teleport(x, y, z);
-				this.minecraft.gui.setScreen(null);
-			}),
-			MapMenu.Item.action(Component.translatable("diorama.menu.add_waypoint"), true, () -> {
+		List<MapMenu.Item> items = new ArrayList<>();
+		items.add(MapMenu.Item.info(this.where(x, y, z)));
+		items.add(MapMenu.Item.action(Component.translatable("diorama.menu.teleport_here"), Waypoints.canTeleport(), () -> {
+			Waypoints.teleport(x, y, z);
+			this.minecraft.gui.setScreen(null);
+		}));
+		if (Settings.get().mapAddWaypoints) {
+			items.add(MapMenu.Item.action(Component.translatable("diorama.menu.add_waypoint"), true, () -> {
 				Waypoint waypoint = Waypoints.at(spot);
 				if (waypoint != null) {
 					this.minecraft.gui.setScreen(new WaypointEditScreen(this, waypoint, true));
 				}
-			}),
-			MapMenu.Item.action(Component.translatable("diorama.menu.add_temporary"), true, () -> Waypoints.addTemporary(spot)),
-			// Chat can't take it back, so sharing asks twice.
-			MapMenu.Item.confirmed(Component.translatable("diorama.menu.share_location"), Component.translatable("diorama.menu.share_confirm"), () -> {
-				String dimension = Waypoints.dimension();
-				Waypoint location = new Waypoint(Component.translatable("diorama.menu.shared_location").getString(), x, y, z,
-					dimension != null ? dimension : "minecraft:overworld", Waypoint.PALETTE[0]);
-				if (WaypointShare.send(location)) {
-					this.minecraft.gui.setScreen(null);
-				}
-			})
-		);
+			}));
+			items.add(MapMenu.Item.action(Component.translatable("diorama.menu.add_temporary"), true, () -> Waypoints.addTemporary(spot)));
+		}
+		// Chat can't take it back, so sharing asks twice.
+		items.add(MapMenu.Item.confirmed(Component.translatable("diorama.menu.share_location"), Component.translatable("diorama.menu.share_confirm"), () -> {
+			String dimension = Waypoints.dimension();
+			Waypoint location = new Waypoint(Component.translatable("diorama.menu.shared_location").getString(), x, y, z,
+				dimension != null ? dimension : "minecraft:overworld", Waypoint.PALETTE[0]);
+			if (WaypointShare.send(location)) {
+				this.minecraft.gui.setScreen(null);
+			}
+		}));
+		return items;
 	}
 
 	private List<MapMenu.Item> waypointItems(Waypoint waypoint) {
@@ -614,7 +749,14 @@ public final class MapScreen extends Screen {
 		if (this.pressOnControl) {
 			return false;
 		}
-		if (button == InputConstants.MOUSE_BUTTON_LEFT && this.dragged) {
+		if (this.draw.active() && !this.draw.pans(button)) {
+			if (this.lastView != null) {
+				this.draw.drag(this.lastView, this.font, this.dimension(), x, y);
+			}
+			return true;
+		}
+		// While drawing, the right and middle buttons pan too.
+		if ((button == InputConstants.MOUSE_BUTTON_LEFT || this.draw.active()) && this.dragged) {
 			// The menu stays where it opened, so it can't follow the map.
 			this.menu = null;
 			this.centerU -= dx / this.zoom;
@@ -625,8 +767,13 @@ public final class MapScreen extends Screen {
 		return false;
 	}
 
+	// The mouse wheel had only the one axis on 1.20.1.
 	@Override
+	//? if >=1.21 {
 	public boolean mouseScrolled(double x, double y, double scrollX, double scrollY) {
+	//?} else {
+	/*public boolean mouseScrolled(double x, double y, double scrollY) {
+	*///?}
 		this.menu = null;
 		double before = this.zoom;
 		double after = Math.max(this.minZoom(), Math.min(MAX_ZOOM, before * Math.pow(1.25, scrollY)));
@@ -652,6 +799,10 @@ public final class MapScreen extends Screen {
 
 	/** A key press, and whether it is bound to the waypoint list or the map; false leaves it to the screen. */
 	private boolean keyDown(int key, boolean waypointListKey, boolean mapKey) {
+		if (this.draw.typing()) {
+			// Typing a note: only Enter and Esc are the map's, the rest are the note's.
+			return this.draw.key(key, this.dimension());
+		}
 		// The player's own bindings come before the map's fixed keys, so Open map rebound to C still closes it.
 		if (waypointListKey) {
 			this.minecraft.gui.setScreen(new WaypointListScreen(this));
@@ -663,6 +814,9 @@ public final class MapScreen extends Screen {
 		}
 		if (key == InputConstants.KEY_ESCAPE && this.menu != null) {
 			this.menu = null;
+			return true;
+		}
+		if (this.draw.key(key, this.dimension())) {
 			return true;
 		}
 		LocalPlayer player = this.minecraft.player;
@@ -726,19 +880,22 @@ public final class MapScreen extends Screen {
 			view.zoom(), view.layer());
 		List<WaypointOverlay.Pin> pins = WaypointOverlay.layout(clear, waypoints, true);
 		int bx0 = this.zoomIn.getX() - 2;
-		int by0 = this.zoomIn.getY() - 2;
+		// From the export (or draw) button down to recenter.
+		int by0 = (this.export.visible ? this.export.getY() : this.drawButton.getY()) - 2;
 		int bx1 = this.zoomIn.getX() + this.zoomIn.getWidth() + 2;
 		int by1 = this.recenter.getY() + this.recenter.getHeight() + 2;
 		List<WaypointOverlay.Pin> out = new ArrayList<>(pins.size());
 		for (WaypointOverlay.Pin pin : pins) {
 			float r = pin.size() / 2 + 2;
-			if (pin.clamped() && pin.x() + r > bx0 && pin.x() - r < bx1 && pin.y() + r > by0 && pin.y() - r < by1) {
+			// Initials of three or four letters make the badge wider than it's tall.
+			float rx = r + Pins.stretch(pin.waypoint(), (int) pin.size()) / 2.0F;
+			if (pin.clamped() && pin.x() + rx > bx0 && pin.x() - rx < bx1 && pin.y() + r > by0 && pin.y() - r < by1) {
 				// An edge pin behind the zoom buttons moves the shorter way out: above them or left.
 				float up = pin.y() + r - by0;
-				float left = pin.x() + r - bx0;
+				float left = pin.x() + rx - bx0;
 				pin = up <= left
 					? new WaypointOverlay.Pin(pin.waypoint(), pin.x(), by0 - r, pin.size(), true)
-					: new WaypointOverlay.Pin(pin.waypoint(), bx0 - r, pin.y(), pin.size(), true);
+					: new WaypointOverlay.Pin(pin.waypoint(), bx0 - rx, pin.y(), pin.size(), true);
 			}
 			out.add(pin);
 		}
@@ -758,7 +915,10 @@ public final class MapScreen extends Screen {
 			sprite(graphics, selected ? (hovered ? TAB_SELECTED_HIGHLIGHTED : TAB_SELECTED) : (hovered ? TAB_HIGHLIGHTED : TAB), x, 0, w, h);
 			if (selected) {
 				// The selected tab's sprite is open in the middle; the game puts its menu backdrop there.
+				// 1.20.1's tab texture is filled in, so it needs none.
+				//? if >=1.21 {
 				graphics.fill(x + 2, 2, x + w - 2, h, 0x40000000);
+				//?}
 				int underline = nameWidth - 1;
 				graphics.fill(x + (w - underline) / 2, h - 3, x + (w - underline) / 2 + underline, h - 2, 0xFFFFFFFF);
 			}
@@ -780,15 +940,39 @@ public final class MapScreen extends Screen {
 		return -1;
 	}
 
+	/** One of the game's tabs, as the map's Surface and Caves are drawn. */
+	static void tab(GuiGraphicsExtractor graphics, boolean selected, boolean hovered, int x, int y, int w, int h) {
+		sprite(graphics, selected ? (hovered ? TAB_SELECTED_HIGHLIGHTED : TAB_SELECTED) : (hovered ? TAB_HIGHLIGHTED : TAB), x, y, w, h);
+	}
+
 	private static void sprite(GuiGraphicsExtractor graphics, Identifier sprite, int x, int y, int w, int h) {
 		//? if >=1.21.6 {
 		graphics.blitSprite(RenderPipelines.GUI_TEXTURED, sprite, x, y, w, h);
 		//?} else if >=1.21.2 {
 		/*graphics.blitSprite(RenderType::guiTextured, sprite, x, y, w, h);
-		*///?} else {
+		*///?} else if >=1.21 {
 		/*graphics.blitSprite(sprite, x, y, w, h);
+		*///?} else {
+		/*// From 1.20.1's tab texture, one 24 pixel row per state. Its tabs are always 24 tall; these
+		// are shorter, so they take the top h rows and slice only the 2 pixel sides (1.20.1's
+		// nine-slice divides by the bottom border when the height differs, and the tabs have none).
+		int row = sprite == TAB_SELECTED ? 0 : sprite == TAB_SELECTED_HIGHLIGHTED ? 1 : sprite == TAB ? 2 : 3;
+		graphics.blitNineSliced(TAB_BUTTON, x, y, w, h, 2, 2, 2, 0, 130, h, 0, row * 24);
 		*///?}
 	}
+
+	/** The Export button's icon: a framed picture of a hill under the sun, 11 by 9. */
+	private static final String[] PICTURE = {
+		"###########",
+		"#.........#",
+		"#......##.#",
+		"#......##.#",
+		"#...#.....#",
+		"#..#.#....#",
+		"#.#...#.#.#",
+		"##.....#.##",
+		"###########"
+	};
 
 	/** A small up or down arrow on a slice button, grey when it can't go further. */
 	private void caret(GuiGraphicsExtractor graphics, Button button, boolean down) {
@@ -806,12 +990,12 @@ public final class MapScreen extends Screen {
 		if (y < BAR || y >= this.height - BOTTOM_BAR) {
 			return true;
 		}
-		return this.onButton(x, y) || this.layer != TileKey.SURFACE && this.gauge.contains(x, y);
+		return this.onButton(x, y) || this.layer != TileKey.SURFACE && this.gauge.contains(x, y) || this.draw.onControls(x, y);
 	}
 
 	/** Whether a point is on a shown button, whether or not it can be pressed right now. */
 	private boolean onButton(double x, double y) {
-		for (AbstractWidget widget : new AbstractWidget[] {this.waypointsButton, this.settingsButton, this.zoomIn, this.zoomOut, this.recenter, this.sliceUp, this.sliceDown}) {
+		for (AbstractWidget widget : new AbstractWidget[] {this.mapsButton, this.waypointsButton, this.settingsButton, this.export, this.zoomIn, this.zoomOut, this.recenter, this.sliceUp, this.sliceDown, this.drawButton}) {
 			if (on(widget, x, y)) {
 				return true;
 			}
@@ -837,6 +1021,10 @@ public final class MapScreen extends Screen {
 		if (on(this.waypointsButton, x, y) && !DioramaClient.WAYPOINT_LIST.isUnbound()) {
 			return tip(this.waypointsButton, this.waypointsButton.getMessage(), key(DioramaClient.WAYPOINT_LIST.getTranslatedKeyMessage()));
 		}
+		if (on(this.export, x, y)) {
+			return new Tip(List.of(Component.translatable("diorama.export.title").getVisualOrderText()),
+				new ScreenRectangle(this.export.getX(), this.export.getY(), this.export.getWidth(), this.export.getHeight()));
+		}
 		if (on(this.zoomIn, x, y)) {
 			return tip(this.zoomIn, Component.translatable("diorama.map.zoom_in"), Component.translatable("diorama.map.scroll_up"));
 		}
@@ -845,6 +1033,9 @@ public final class MapScreen extends Screen {
 		}
 		if (on(this.recenter, x, y)) {
 			return tip(this.recenter, Component.translatable("diorama.map.recenter"), key(keyName(InputConstants.KEY_SPACE)));
+		}
+		if (on(this.drawButton, x, y)) {
+			return tip(this.drawButton, Component.translatable("diorama.draw.button"), Component.translatable(this.draw.active() ? "diorama.draw.button.stop" : "diorama.draw.button.start"));
 		}
 		if (on(this.sliceUp, x, y)) {
 			return tip(this.sliceUp, Component.translatable("diorama.map.slice_up"), key(keyName(InputConstants.KEY_PAGEUP)));
@@ -877,7 +1068,8 @@ public final class MapScreen extends Screen {
 			this.spotV = blockV;
 			this.spotLayer = this.layer;
 			this.spotAge = 0;
-			CompletableFuture<@Nullable BlockPos> found = this.spotAt(mouseX, mouseY);
+			// Not from the world's save: that loads chunks on the server, too much for every block the mouse crosses.
+			CompletableFuture<@Nullable BlockPos> found = this.spotAt(mouseX, mouseY, false).thenApply(MapLevel.Spot::pos);
 			Object request = new Object();
 			this.spotRequest = request;
 			if (found.isDone()) {
@@ -903,7 +1095,21 @@ public final class MapScreen extends Screen {
 		Component detail = biome != null
 			? Component.translatable("diorama.map.spot_detail", biome, distance)
 			: Component.translatable("diorama.map.distance", distance);
-		return lines(Component.translatable("diorama.map.spot", spot.getX(), spot.getY(), spot.getZ()), detail);
+		List<FormattedCharSequence> lines = lines(Component.translatable("diorama.map.spot", spot.getX(), spot.getY(), spot.getZ()), detail);
+		Claims.Claim claim = Settings.get().claims == Settings.ClaimsShown.OFF ? null : Claims.get().at(spot.getX() >> 4, spot.getZ() >> 4);
+		if (claim != null) {
+			lines = new ArrayList<>(lines);
+			lines.add(claimLine(claim).getVisualOrderText());
+		}
+		return lines;
+	}
+
+	/** Who owns the chunk under the mouse: a square of their colour, then their name. */
+	private static Component claimLine(Claims.Claim claim) {
+		Component owner = claim.name().isEmpty() ? Component.translatable("diorama.map.claim.unnamed") : Component.literal(claim.name());
+		Component line = Component.literal("■ ").withStyle(s -> s.withColor(claim.rgb()))
+			.append(Component.translatable("diorama.map.claim", owner).withStyle(ChatFormatting.GRAY));
+		return claim.forceLoaded() ? line.copy().append(Component.translatable("diorama.map.claim.force_loaded").withStyle(ChatFormatting.GRAY)) : line;
 	}
 
 	/** The biome at a spot, where the game has its chunk loaded; null elsewhere. */
@@ -943,6 +1149,21 @@ public final class MapScreen extends Screen {
 	@Override
 	public void removed() {
 		this.viewport.close();
+		this.draw.close();
+	}
+
+	private String dimension() {
+		return this.minecraft.level == null ? "" : this.minecraft.level.dimension().identifier().toString();
+	}
+
+	/** For tests: draw mode. */
+	public DrawMode drawMode() {
+		return this.draw;
+	}
+
+	/** For tests: the button that turns draw mode on and off. */
+	public Button drawButton() {
+		return this.drawButton;
 	}
 
 	/** For tests: the view drawn last frame. */
@@ -953,6 +1174,11 @@ public final class MapScreen extends Screen {
 	/** For tests: the waypoint pins drawn last frame, in GUI coordinates. */
 	public List<WaypointOverlay.Pin> pins() {
 		return this.pins;
+	}
+
+	/** For tests: the Export button. */
+	public Button exportButton() {
+		return this.export;
 	}
 
 	/** For tests: the right-click menu, if it's open. */

@@ -1,5 +1,6 @@
 package dev.diorama.render;
 
+import dev.diorama.Claims;
 import dev.diorama.Diorama;
 import dev.diorama.Projection;
 import dev.diorama.bake.BlockLooks;
@@ -13,6 +14,8 @@ import dev.diorama.bake.TileSpots;
 import dev.diorama.data.ChunkSnapshot;
 import dev.diorama.data.SeenBlocks;
 import dev.diorama.data.TileStore;
+import dev.diorama.data.WorldSavePick;
+import dev.diorama.render.gpu.MapTexture;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.BitSet;
@@ -124,6 +127,18 @@ public final class MapLevel implements ChunkSource {
 	private int playerChunkZ;
 	private long frame;
 	private volatile boolean closed;
+	/** Tiles whose claims are being painted. */
+	private final Set<TileKey> claimsInFlight = new HashSet<>();
+	private final ConcurrentLinkedQueue<PaintedClaims> paintedClaims = new ConcurrentLinkedQueue<>();
+
+	/** Claims painted for a tile, on its pixels as they were at {@code revision}. */
+	private record PaintedClaims(TileKey key, MapTile tile, Claims.Snapshot claims, int revision, int @Nullable [] pixels) {
+	}
+
+	/** At most this many tiles' claims are painted at once, beside the bakes. */
+	private static final int CLAIM_PAINTS = 2;
+	/** A tile whose pixels changed has its claims painted again at most this often. */
+	private static final long CLAIM_REPAINT_MS = 2000;
 
 	/** See {@link ChunkSource#roof()}. */
 	private final int roof;
@@ -526,6 +541,11 @@ public final class MapLevel implements ChunkSource {
 		return this.store != null;
 	}
 
+	/** The saved sky view, or null when nothing is saved. Render thread. */
+	public @Nullable TileStore savedMap() {
+		return this.store;
+	}
+
 	/** Uploads finished bakes and starts new ones. Call regularly on the render thread. */
 	public void update() {
 		this.frame++;
@@ -564,6 +584,7 @@ public final class MapLevel implements ChunkSource {
 				// Baked only to be saved; a map that wants it will bake it again.
 				if (this.store != null) {
 					this.store.baked(image);
+					this.pixelsMoved(image.key());
 				}
 				continue;
 			}
@@ -581,9 +602,18 @@ public final class MapLevel implements ChunkSource {
 				this.tiles.put(image.key(), tile);
 			}
 			tile.upload(image);
+			this.pixelsMoved(image.key());
 			this.coverageVersion++;
 			if (this.store != null && !image.key().isCave() && image.key().lod() == 0) {
 				this.store.baked(image);
+			}
+		}
+		PaintedClaims painted;
+		while ((painted = this.paintedClaims.poll()) != null) {
+			this.claimsInFlight.remove(painted.key());
+			// Not for a tile evicted meanwhile, nor one put in its place.
+			if (this.tiles.get(painted.key()) == painted.tile() && !this.closed) {
+				painted.tile().paintClaims(painted.pixels(), painted.claims(), painted.revision());
 			}
 		}
 		if (this.trimStuck && System.currentTimeMillis() - this.lastTrimMs >= TRIM_RETRY_MS) {
@@ -786,19 +816,181 @@ public final class MapLevel implements ChunkSource {
 	}
 
 	/**
-	 * Where a player would stand at a map point by the spots saved with its tile, for where the
-	 * chunks are gone. Reads the disk off the render thread; null if nothing was saved there.
+	 * What the map knows of a point: where a player would stand there, or null for nowhere.
+	 * {@code unsaved} when the map shows something there but doesn't know where its ground is.
 	 */
-	public CompletableFuture<@Nullable BlockPos> savedSpot(int layer, double u, double v) {
+	public record Spot(@Nullable BlockPos pos, boolean unsaved) {
+		public static final Spot NOTHING = new Spot(null, false);
+	}
+
+	/**
+	 * Where a player would stand at a map point by the spots saved with its tile, for where the
+	 * chunks are gone. Reads the disk off the render thread.
+	 *
+	 * <p>A tile saved before tiles kept their spots (Diorama 0.3.0 and older) has none. Where it
+	 * shows something, {@code readWorld} works the spot out from the world's chunks in
+	 * singleplayer; elsewhere, or where the save has nothing either, the answer is {@code unsaved}.
+	 */
+	public CompletableFuture<Spot> savedSpot(int layer, double u, double v, BlockLooks looks, boolean readWorld) {
 		TileStore store = this.store;
 		if (store == null || layer != TileKey.SURFACE) {
-			return CompletableFuture.completedFuture(null);
+			return CompletableFuture.completedFuture(Spot.NOTHING);
 		}
 		TileKey key = new TileKey(layer, (int) Math.floor(u / Projection.TILE_UNITS), (int) Math.floor(v / Projection.TILE_UNITS));
-		return CompletableFuture.supplyAsync(() -> TileSpots.spot(key, store.spots(key), u, v)).exceptionally(t -> {
+		WorldSavePick world = readWorld ? WorldSavePick.current() : null;
+		boolean fog = this.fogOfWar;
+		return CompletableFuture.supplyAsync(() -> {
+			int[] spots = store.spots(key);
+			if (TileSpots.known(key, spots, u, v)) {
+				return CompletableFuture.completedFuture(new Spot(TileSpots.spot(key, spots, u, v), false));
+			}
+			if (!drawn(store.read(key), key, u, v)) {
+				return CompletableFuture.completedFuture(Spot.NOTHING);
+			}
+			if (world == null) {
+				return CompletableFuture.completedFuture(new Spot(null, true));
+			}
+			// Nothing found in the save, where the map shows something: say to come back, not that nothing's there.
+			return world.pick(this, looks, u, v, fog).thenApply(pos -> new Spot(pos, pos == null));
+		}).thenCompose(spot -> spot).exceptionally(t -> {
 			Diorama.LOGGER.warn("Couldn't read the saved spots of tile {}", key, t);
-			return null;
+			return Spot.NOTHING;
 		});
+	}
+
+	/** Whether a saved tile shows anything at map point {@code (u, v)}. */
+	private static boolean drawn(int @Nullable [] pixels, TileKey key, double u, double v) {
+		if (pixels == null) {
+			return false;
+		}
+		int size = Projection.TILE_PIXELS;
+		int x = (int) Math.max(0L, Math.min(size - 1L, (long) Math.floor((u - key.minU()) * Projection.PIXELS_PER_UNIT)));
+		int y = (int) Math.max(0L, Math.min(size - 1L, (long) Math.floor((v - key.minV()) * Projection.PIXELS_PER_UNIT)));
+		return (pixels[y * size + x] >>> 24) != 0;
+	}
+
+	/**
+	 * The land claims to draw over a tile, or null for none. Asks for them to be painted, off the
+	 * render thread, when the claims under the tile changed or the tile did; the old ones show
+	 * meanwhile. Only the saved sky view knows which chunk each pixel shows.
+	 */
+	public @Nullable MapTexture claims(TileKey key, MapTile tile) {
+		TileStore store = this.store;
+		if (store == null || key.isCave()) {
+			return null;
+		}
+		Claims.Snapshot claims = Claims.get();
+		Claims.Snapshot painted = tile.claimsPainted;
+		boolean moved = tile.claimsRevision != tile.pixelsRevision;
+		if (painted == claims && !moved) {
+			return tile.claims();
+		}
+		// The chunks the tile could show, and the columns past its sides that its edges look at:
+		// its columns, and the rows' ground anywhere from the bottom of the world to the top.
+		int cx0 = Math.floorDiv((int) Math.floor(key.minU()), 16) - 1;
+		int cx1 = Math.floorDiv((int) Math.ceil(key.minU() + key.units()), 16) + 1;
+		int cz0 = Math.floorDiv((int) Math.floor(Projection.zAt(key.minV(), this.minY)), 16);
+		int cz1 = Math.floorDiv((int) Math.ceil(Projection.zAt(key.minV() + key.units(), this.maxY)), 16);
+		boolean near = claims.mayHaveAny(cx0, cz0, cx1, cz1);
+		boolean changed = painted == null ? near : claims.differsIn(painted, cx0, cz0, cx1, cz1);
+		if (!changed && !(moved && near)) {
+			// Nothing claimed under this tile changed, and its pixels didn't, or nothing is claimed near it.
+			if (painted == null) {
+				tile.paintClaims(null, claims, tile.pixelsRevision);
+			} else {
+				tile.claimsPainted = claims;
+				if (!near) {
+					tile.claimsRevision = tile.pixelsRevision;
+				}
+			}
+			return tile.claims();
+		}
+		// New claims at once; moved pixels after a pause, as a tile in view can change every few ticks.
+		boolean due = changed || System.currentTimeMillis() - tile.pixelsChanged > CLAIM_REPAINT_MS;
+		if (due && !this.claimsInFlight.contains(key) && this.claimsInFlight.size() < CLAIM_PAINTS) {
+			this.claimsInFlight.add(key);
+			int revision = tile.pixelsRevision;
+			BAKERS.execute(() -> {
+				int[] pixels = null;
+				try {
+					pixels = this.paintClaims(store, key, claims);
+				} catch (Throwable t) {
+					Diorama.LOGGER.error("Failed to paint the claims on tile {}", key, t);
+				}
+				this.paintedClaims.add(new PaintedClaims(key, tile, claims, revision, pixels));
+			});
+		}
+		return tile.claims();
+	}
+
+	/**
+	 * A tile's pixels changed, so may the ground its claims are painted on, and the edge rows the
+	 * tiles above and below it paint their own edges against.
+	 */
+	private void pixelsMoved(TileKey key) {
+		long now = System.currentTimeMillis();
+		for (int dv = -1; dv <= 1; dv++) {
+			MapTile tile = this.tiles.get(new TileKey(key.layer(), key.tileU(), key.tileV() + dv, key.lod()));
+			if (tile != null) {
+				// The repaint waits from the first change it hasn't painted, so a tile changing all
+				// the time still gets one.
+				if (tile.claimsRevision == tile.pixelsRevision) {
+					tile.pixelsChanged = now;
+				}
+				tile.pixelsRevision++;
+			}
+		}
+	}
+
+	/**
+	 * For tests: makes the overview tiles from level 1 up to {@code key} over its area look saved
+	 * before chunks were kept, and reloads {@code key}. Not on the render thread.
+	 */
+	public void forgetChunks(TileKey key) {
+		TileStore store = this.store;
+		if (store == null) {
+			return;
+		}
+		for (int lod = 1; lod <= key.lod(); lod++) {
+			int span = 1 << (key.lod() - lod);
+			for (int du = 0; du < span; du++) {
+				for (int dv = 0; dv < span; dv++) {
+					store.forgetChunks(new TileKey(key.layer(), key.tileU() * span + du, key.tileV() * span + dv, lod));
+				}
+			}
+		}
+		this.overviewChanged.add(key);
+	}
+
+	/** For tests: makes a level-0 tile look saved before tiles kept their spots, on disk too. Not on the render thread. */
+	public void forgetSpots(TileKey key) {
+		TileStore store = this.store;
+		if (store != null) {
+			store.forgetSpots(key);
+		}
+	}
+
+	/** For tests: whether a level-0 tile has spots saved. Not on the render thread. */
+	public boolean hasSavedSpots(TileKey key) {
+		TileStore store = this.store;
+		return store != null && store.spots(key) != null;
+	}
+
+	/** For tests: the claims a tile shows by the current claims, painted on this thread; null for none. */
+	public int @Nullable [] claimPixels(TileKey key) {
+		TileStore store = this.store;
+		return store == null ? null : this.paintClaims(store, key, Claims.get());
+	}
+
+	/** A tile's claims, with its edge rows told apart from the tiles above and below it. Not on the render thread. */
+	private int @Nullable [] paintClaims(TileStore store, TileKey key, Claims.Snapshot claims) {
+		byte[] chunks = store.chunks(key);
+		if (chunks == null) {
+			return null;
+		}
+		TileKey north = new TileKey(key.layer(), key.tileU(), key.tileV() - 1, key.lod());
+		TileKey south = new TileKey(key.layer(), key.tileU(), key.tileV() + 1, key.lod());
+		return ClaimPaint.paint(key, chunks, store.chunks(north), store.chunks(south), claims);
 	}
 
 	private void loadOverview(TileKey key, TileStore store) {
