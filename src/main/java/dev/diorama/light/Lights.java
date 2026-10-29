@@ -171,7 +171,7 @@ public final class Lights {
 		}
 		MapStyle style = MapStyle.get();
 		Map<UUID, Glow> kept = new HashMap<>();
-		List<Glow> drawn = new ArrayList<>();
+		List<Shown> drawn = new ArrayList<>();
 		// In id order, so the groups come out the same every frame.
 		held.sort(Comparator.comparing(Held::id));
 		List<Bounds> before = new ArrayList<>();
@@ -202,11 +202,16 @@ public final class Lights {
 			this.make(glow, lights, taken, pu0, pv0, pu1, pv1, view.layer(), style);
 			// Not one made for another slice, or with a light no longer shown, while this one's is made.
 			if (glow.lit && glow.texture != null && glow.layer == view.layer() && lights.stream().map(Held::id).toList().containsAll(glow.lights)) {
-				Glow made = glow;
-				// One still being remade after its group split differently can overlap another; left out until it's made.
-				if (drawn.stream().allMatch(made::apart)) {
-					drawn.add(glow);
+				// One still being remade after its group split differently can overlap another; only what's outside it is drawn until it's made.
+				List<Bounds> pieces = List.of(glow.bounds());
+				for (Shown other : drawn) {
+					if (!glow.apart(other.glow())) {
+						for (Bounds hole : other.pieces()) {
+							pieces = cut(pieces, hole);
+						}
+					}
 				}
+				drawn.add(new Shown(glow, pieces));
 			}
 		}
 		this.glows.values().forEach(Lights::drop);
@@ -215,22 +220,57 @@ public final class Lights {
 		MapCanvas canvas = MapCanvas.of(graphics);
 		Circle circle = view.round() ? Circle.in(view) : null;
 		int tint = Math.round(Math.max(0, Math.min(1, opacity)) * 255) << 24 | 0xFFFFFF;
-		for (Glow glow : drawn) {
-			float x0 = view.screenX(glow.pu0 / ppu);
-			float y0 = view.screenY(glow.pv0 / ppu);
-			float x1 = view.screenX((glow.pu0 + glow.width) / ppu);
-			float y1 = view.screenY((glow.pv0 + glow.height) / ppu);
-			float tu = (float) glow.width / glow.edge;
-			float tv = (float) glow.height / glow.edge;
-			if (circle != null) {
-				Circle.Quads inside = circle.clip(x0, y0, x1, y1, 0, 0, tu, tv);
-				if (inside != null) {
-					canvas.quad(glow.texture, MapViewport.sampling(view), inside.corners(), inside.uvs(), tint);
+		for (Shown shown : drawn) {
+			Glow glow = shown.glow();
+			for (Bounds piece : shown.pieces()) {
+				float x0 = view.screenX(piece.pu0() / ppu);
+				float y0 = view.screenY(piece.pv0() / ppu);
+				float x1 = view.screenX(piece.pu1() / ppu);
+				float y1 = view.screenY(piece.pv1() / ppu);
+				float tu0 = (float) (piece.pu0() - glow.pu0) / glow.edge;
+				float tv0 = (float) (piece.pv0() - glow.pv0) / glow.edge;
+				float tu1 = (float) (piece.pu1() - glow.pu0) / glow.edge;
+				float tv1 = (float) (piece.pv1() - glow.pv0) / glow.edge;
+				if (circle != null) {
+					Circle.Quads inside = circle.clip(x0, y0, x1, y1, tu0, tv0, tu1, tv1);
+					if (inside != null) {
+						canvas.quad(glow.texture, MapViewport.sampling(view), inside.corners(), inside.uvs(), tint);
+					}
+				} else {
+					canvas.rect(glow.texture, MapViewport.sampling(view), x0, y0, x1, y1, tu0, tv0, tu1, tv1, tint);
 				}
-			} else {
-				canvas.rect(glow.texture, MapViewport.sampling(view), x0, y0, x1, y1, 0, 0, tu, tv, tint);
 			}
 		}
+	}
+
+	/** An overlay to draw, as the parts of it no overlay drawn before it covers. */
+	private record Shown(Glow glow, List<Bounds> pieces) {
+	}
+
+	/** {@code pieces} with {@code hole} taken out. */
+	private static List<Bounds> cut(List<Bounds> pieces, Bounds hole) {
+		List<Bounds> left = new ArrayList<>();
+		for (Bounds p : pieces) {
+			if (!p.touches(hole.pu0(), hole.pv0(), hole.pu1(), hole.pv1())) {
+				left.add(p);
+				continue;
+			}
+			int pv0 = Math.max(p.pv0(), hole.pv0());
+			int pv1 = Math.min(p.pv1(), hole.pv1());
+			if (p.pv0() < hole.pv0()) {
+				left.add(new Bounds(p.pu0(), p.pv0(), p.pu1(), hole.pv0()));
+			}
+			if (hole.pv1() < p.pv1()) {
+				left.add(new Bounds(p.pu0(), hole.pv1(), p.pu1(), p.pv1()));
+			}
+			if (p.pu0() < hole.pu0()) {
+				left.add(new Bounds(p.pu0(), pv0, hole.pu0(), pv1));
+			}
+			if (hole.pu1() < p.pu1()) {
+				left.add(new Bounds(hole.pu1(), pv0, p.pu1(), pv1));
+			}
+		}
+		return left;
 	}
 
 	/** Whether the radar shows {@code player} to {@code self}, as it does other players. */
