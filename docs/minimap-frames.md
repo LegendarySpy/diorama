@@ -73,7 +73,7 @@ The picture is 128 by 128 pixels, with a transparent background. It shows a map 
 
 **Round frames** are a ring. Its outer edge touches the sides of the picture, and the map's edge is 4 pixels in from there. On a bigger or smaller minimap Diorama bends the ring to fit: it stays the same thickness and only gets longer or shorter around the circle. Anything you put at north, east, south or west stays there.
 
-For more detail, make the picture 256, 512 or any other size. Diorama reads it as the same picture, so at 512 the outer 16 pixels become the outer 64. Square frames stay sharp, so 128 is plenty for pixel art. Round frames are smoothed, because a curve can't line up with the screen's pixels, so draw them at 512 with soft edges, like the example pack.
+For more detail, make the picture 256, 512 or any other size up to 2048. Diorama reads it as the same picture, so at 512 the outer 16 pixels become the outer 64. Square frames stay sharp, so 128 is plenty for pixel art. Round frames are smoothed, because a curve can't line up with the screen's pixels, so draw them at 512 with soft edges, like the example pack.
 
 ### 4. Load it
 
@@ -84,4 +84,4 @@ Turn the pack on in **Options > Resource Packs**. After you change a file, press
 - Check the file names and folders against the layout above.
 - Check the **Frame** and **Shape** settings. A `classic_round.png` only shows with the Classic frame on a round minimap.
 - Make sure the pack is turned on, and above any other pack that has the same file. The top pack wins.
-- Look in `.minecraft/logs/latest.log`. If a picture can't be read, Diorama writes `Can't read the minimap frame` with the file's name, and draws no frame until it's fixed.
+- Look in `.minecraft/logs/latest.log`. If a picture can't be read or is wider or taller than 2048, Diorama names the file there and draws no frame until it's fixed.

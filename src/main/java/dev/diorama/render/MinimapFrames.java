@@ -33,6 +33,8 @@ public final class MinimapFrames {
 	private static final int OUTSIDE = 4;
 	/** The width of the part of a picture that's used. What's inside {@link #OUTSIDE} lies over the map's edge. */
 	private static final int BAND = 16;
+	/** The widest file read: far more detail than the frame shows, and a limit on what a pack can make the game allocate. */
+	private static final int LARGEST_FILE = 2048;
 	private static final String FOLDER = "textures/gui/minimap_frame/";
 	private static final Map<String, Optional<Picture>> PICTURES = new HashMap<>();
 
@@ -135,6 +137,10 @@ public final class MinimapFrames {
 			int width = image.getWidth();
 			int height = image.getHeight();
 			int edge = Math.max(width, height);
+			if (edge > LARGEST_FILE) {
+				Diorama.LOGGER.warn("The minimap frame {} is {} x {}; the most is {} x {}", file, width, height, LARGEST_FILE, LARGEST_FILE);
+				return null;
+			}
 			int[] abgr = new int[edge * edge];
 			for (int y = 0; y < height; y++) {
 				for (int x = 0; x < width; x++) {
@@ -143,7 +149,12 @@ public final class MinimapFrames {
 				}
 			}
 			MapTexture texture = MapTexture.create("diorama minimap frame", edge, 1);
-			texture.write(0, 0, 0, edge, abgr);
+			try {
+				texture.write(0, 0, 0, edge, abgr);
+			} catch (RuntimeException e) {
+				texture.close();
+				throw e;
+			}
 			return new Picture(texture, (float) width / edge, (float) height / edge);
 		} catch (IOException | RuntimeException e) {
 			Diorama.LOGGER.warn("Can't read the minimap frame {}", file, e);
