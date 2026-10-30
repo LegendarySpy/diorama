@@ -155,28 +155,47 @@ def warm_name(node, snapshot):
     return f'{WARM_PREFIX}{CHECKOUT}-{source}-{node}'
 
 
-def warm_lock(repo, node):
-    """An open lock file while this script owns the checkout's warm VM for `node`, else None: two
-    runs from one checkout at once can't share it, so the second gets a VM of its own."""
+def warm_lock(repo, node, wait=0):
+    """An open lock file while this script may take or give back the checkout's warm VM for
+    `node`, else None after `wait` seconds. Only runs from this checkout use that VM, so holding
+    this while taking and giving back means the two never overlap."""
     path = repo / 'build' / 'boat-runs' / f'warm-{node}.lock'
-    handle = open(path, 'a+')
-    try:
-        if os.name == 'nt':
-            import msvcrt
-            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-        else:
-            import fcntl
-            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
-        handle.close()
-        return None
-    return handle
+    until = time.time() + wait
+    while True:
+        handle = open(path, 'a+')
+        try:
+            if os.name == 'nt':
+                import msvcrt
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return handle
+        except OSError:
+            handle.close()
+            if time.time() >= until:
+                return None
+            time.sleep(2)
+
+
+def vm_name(vm):
+    """The VM's name as boat.dev has it now, or None when boat info fails."""
+    return next(events(boat('info', vm, '--json', timeout=30).stdout), {}).get('sandbox', {}).get('name')
+
+
+def rename(vm, name):
+    """True if the VM is now called `name`, False if it isn't, None if that can't be told: a rename
+    whose answer got lost may still have happened."""
+    if boat('rename', vm, name, '--json').returncode == 0:
+        return True
+    now = vm_name(vm)
+    return None if now is None else now == name
 
 
 def take_warm(node, snapshot, size):
     """This checkout's warm VM for the node, renamed to this run's PREFIX + node, if one is running
     idle and was made from `snapshot` at this size; deletes this checkout's others for the node
-    (stopped, from an older snapshot)."""
+    (stopped, from an older snapshot). Call it holding warm_lock."""
     found = our_vms(f'{WARM_PREFIX}{CHECKOUT}-') or []
     want = warm_name(node, snapshot)
     reuse = None
@@ -190,27 +209,41 @@ def take_warm(node, snapshot, size):
             idle = next(events(boat('exec', vm, '--timeout', '30', '--json', '--', 'flock', '-n',
                                     '/home/user/sandbox.lock', 'true').stdout), {}).get('exitCode') == 0
             if idle and sandbox.get('type') == size:
-                # Ours from here: cleanup finds it by this run's prefix. A rename that fails leaves
-                # it warm for later; this run makes a VM of its own.
-                if boat('rename', vm, PREFIX + node, '--json').returncode == 0:
-                    # Long enough for this run; set back to the warm time after it.
-                    boat_retry('extend', vm, '--ttl', str(TTL), '--json')
-                    reuse = vm
+                taken = rename(vm, PREFIX + node)
+                if taken is None:
+                    # Maybe ours, maybe still warm: either way cleanup or its lifetime ends it.
+                    continue
+                if taken:
+                    # Ours from here: cleanup finds it by this run's prefix. It needs to live
+                    # long enough for this run; it's set back to the warm time after.
+                    if boat_retry('extend', vm, '--ttl', str(TTL), '--json').returncode == 0:
+                        reuse = vm
+                    else:
+                        boat('delete', vm, '--yes', '--json')
                 continue
         if state not in GONE:
             boat('delete', vm, '--yes', '--json')
     return reuse
 
 
-def keep_warm(node, vm, snapshot, minutes):
+def keep_warm(repo, node, vm, snapshot, minutes):
     """Gives the VM back to this checkout's warm pool, until boat.dev archives it `minutes` from
-    now; False if that failed and it's still this run's to delete."""
-    if boat('extend', vm, '--ttl', str(minutes * 60), '--json').returncode:
+    now. True when it's given back, False when it's still this run's to delete, None when that
+    can't be told: then it's left alone, and its lifetime ends it."""
+    lock = warm_lock(repo, node, wait=120)
+    if not lock:
         return False
-    if boat('rename', vm, warm_name(node, snapshot), '--json').returncode:
-        return False
-    say(node, f'VM {vm} stays warm {minutes} min for the next run from this checkout (--warm-minutes 0 to delete it now)')
-    return True
+    try:
+        if boat('extend', vm, '--ttl', str(minutes * 60), '--json').returncode:
+            return False
+        given = rename(vm, warm_name(node, snapshot))
+    finally:
+        lock.close()
+    if given:
+        say(node, f'VM {vm} stays warm {minutes} min for the next run from this checkout (--warm-minutes 0 to delete it now)')
+    elif given is None:
+        say(node, f'!! VM {vm} may have been given back warm or not; boat.dev stops it within {minutes} min either way')
+    return given
 
 
 def clear_stopped_warm():
@@ -519,7 +552,8 @@ def run_node(node, args, repo, snapshot, start):
     finally:
         # A failure here is caught by reconcile() at the end.
         warm = done and args.warm_minutes and not args.keep and not interrupted.is_set()
-        if not (warm and keep_warm(node, vm, snapshot, args.warm_minutes)):
+        given = keep_warm(repo, node, vm, snapshot, args.warm_minutes) if warm else False
+        if given is False:
             boat('stop' if name in keep_names else 'delete', vm, '--json', *([] if name in keep_names else ['--yes']))
 
     result = json.loads((out / 'result.json').read_text())
