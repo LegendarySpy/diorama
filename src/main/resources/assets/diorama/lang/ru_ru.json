@@ -315,7 +315,7 @@
     "diorama.draw.help.line": "Клик: точка · Двойной: конец · Shift: прямая · Esc: выход",
     "diorama.draw.help.area": "Клик: угол · Двойной: замкнуть · Esc: выход",
     "diorama.draw.help.note": "Клик и ввод: заметка · Enter: сохранить · Esc: выход",
-    "diorama.draw.help.erase": "Клик/движение: стереть · Ctrl+Z: отмена · Esc: выход",
+    "diorama.draw.help.erase": "Клик/тяните: стереть · Ctrl+Z: отмена · Esc: выход",
     "diorama.draw.help.measure": "Перетащите от одного места к другому для измерения · Esc очищает",
     "diorama.map.under_roof": "Под крышей",
     "diorama.map.chunks": "Чанков: %s",
