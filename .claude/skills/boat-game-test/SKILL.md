@@ -36,7 +36,7 @@ The plan (`box_20`) includes 555 VM-hours a month, counted at the size's rate: s
 | 26.3: game / whole run | 4.6 / 6.6 min | 3.0 / 5.0 min |
 | 1.21.1: game / whole run | 3.1 / 6.0 min | 2.7 / 5.0 min |
 
-About 2.5 min of every run is fixed: VM start, push, Gradle, booting Minecraft and baking the first map. Large only speeds up the game part, so a short run saves a minute or so at twice the VM-hours. Use **default** for a few sections, and **`--type large`** for long runs (`all`, the multiplayer sections) where the game part dominates.
+Before the first section starts, a run spends time on the VM, the push, Gradle, starting Minecraft, making the world and the map's warm-up; the `time:` line shows each. Measured on 2026-10-30 for 26.3 on a default VM, with the world paused while the map settles (#196): the first test began 122–226 s after the script started on a fresh VM and 85–122 s on a warm one, where VM, push and Gradle take seconds. Large only speeds up the game part, so a short run saves a minute or so at twice the VM-hours. Use **default** for a few sections, and **`--type large`** for long runs (`all`, the multiplayer sections) where the game part dominates. 26.3's `all` doesn't fit in the 90-minute test budget even on large: split it into two runs.
 
 ## Limits
 

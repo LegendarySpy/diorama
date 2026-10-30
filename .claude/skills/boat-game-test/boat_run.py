@@ -445,9 +445,14 @@ def run_node(node, args, repo, snapshot, start):
     name = PREFIX + node
     if args.keep:
         keep_names.add(name)
-    lock = warm_lock(repo, node) if args.warm_minutes and not args.keep else None
+    # With --warm-minutes 0 a warm VM is still reused, then deleted at the end.
+    lock = warm_lock(repo, node) if not args.keep else None
     vm = take_warm(node, snapshot, args.type) if lock else None
     reused = vm is not None
+    if lock and not (reused or args.warm_minutes):
+        # Nothing to reuse and nothing to keep: an ordinary VM of this run.
+        lock.close()
+        lock = None
     if lock:
         name = warm_name(node, snapshot)
         warm_in_use[name] = vm
@@ -499,7 +504,7 @@ def run_node(node, args, repo, snapshot, start):
         raise
     finally:
         # A failure here is caught by reconcile() at the end.
-        if done and lock and not interrupted.is_set() and keep_warm(node, vm, args.warm_minutes):
+        if done and lock and args.warm_minutes and not interrupted.is_set() and keep_warm(node, vm, args.warm_minutes):
             warm_in_use.pop(name, None)
         else:
             warm_in_use.pop(name, None)
