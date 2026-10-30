@@ -190,7 +190,7 @@
 	"diorama.settings.neutral.tooltip": "Shows mobs that only attack when provoked, like wolves, bees and endermen, on the minimap and the map.",
 	"diorama.settings.passive.tooltip": "Shows animals, villagers and other harmless mobs on the minimap and the map.",
 	"diorama.settings.items.tooltip": "Shows items lying on the ground as small dots on the minimap and the map.",
-	"diorama.settings.range.tooltip": "Players and mobs farther above or below you than this are left off the minimap and the map.",
+	"diorama.settings.range.tooltip": "Players, mobs and dropped items farther above or below you than this are left off the minimap and the map.",
 	"diorama.settings.chunk_grid.tooltip": "Draws chunk borders on the map.",
 	"diorama.settings.slime_chunks.tooltip": "Marks the chunks where slimes spawn on the map. Single player only, in the Overworld: it needs the world's seed.",
 	"diorama.settings.spawn_spots.tooltip": "Marks blocks on the map where monsters can spawn: those dark even by day, or also those dark only at night.",
