@@ -1,0 +1,9 @@
+{
+  "pack": {
+    "description": "Example minimap frame for Diorama",
+    "pack_format": 15,
+    "supported_formats": [15, 1000],
+    "min_format": 15,
+    "max_format": 1000
+  }
+}
