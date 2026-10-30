@@ -65,6 +65,8 @@ You don't need to know how big a player's minimap is. Draw the frame as it looks
 
 The picture is 128 by 128 pixels, with a transparent background. It shows a map 120 pixels wide, with 4 pixels of room around it. Only the outer 16 pixels get used:
 
+![Which parts of the picture Diorama uses, for a square and a round frame](images/minimap-frames-layout.png)
+
 - The outer 4 pixels sit outside the map.
 - The next 12 pixels sit on top of the map, so corners and ornaments can reach in over it. Keep the rest of this strip transparent, or the player loses that much of the map.
 - Everything further in is ignored.
