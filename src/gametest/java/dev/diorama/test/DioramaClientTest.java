@@ -180,6 +180,9 @@ public class DioramaClientTest implements FabricClientGameTest {
 			if (tests.contains("enlarge")) {
 				enlarge(context);
 			}
+			if (tests.contains("minimap-frames")) {
+				MinimapFrameTest.run(context, world);
+			}
 			if (tests.contains("map-mouse-keys")) {
 				MapMouseKeysTest.run(context);
 			}
@@ -2945,7 +2948,7 @@ public class DioramaClientTest implements FabricClientGameTest {
 		context.waitTicks(10);
 	}
 
-	private static void packFixture(String resource, java.nio.file.Path to) {
+	static void packFixture(String resource, java.nio.file.Path to) {
 		try (java.io.InputStream in = DioramaClientTest.class.getResourceAsStream(resource)) {
 			if (in == null) {
 				throw new AssertionError("Missing fixture " + resource);
@@ -5472,10 +5475,10 @@ public class DioramaClientTest implements FabricClientGameTest {
 		}
 		if (env == null || env.isBlank()) {
 			//? if >=1.21.4 && fabric {
-			return Set.of("tour", "radar", "xaero-icons", "model-faces", "waypoints", "icons", "xaero-import", "unnumbered-states", "failing-model", "fog-of-war", "settings", "overlays", "screens", "enlarge", "game-time", "map-mouse-keys", "image-export", "dimensions", "saved-map", "recreated-world", "sub-maps", "multiplayer", "game-time-server", "server-id", "tracked-players", "realms");
+			return Set.of("tour", "radar", "xaero-icons", "model-faces", "waypoints", "icons", "xaero-import", "unnumbered-states", "failing-model", "fog-of-war", "settings", "overlays", "screens", "enlarge", "minimap-frames", "game-time", "map-mouse-keys", "image-export", "dimensions", "saved-map", "recreated-world", "sub-maps", "multiplayer", "game-time-server", "server-id", "tracked-players", "realms");
 			//?} else {
 			/*// On NeoForge and before 1.21.4 the tests run on src/gameshim, which can't start a dedicated server.
-			return Set.of("tour", "radar", "xaero-icons", "model-faces", "waypoints", "icons", "xaero-import", "unnumbered-states", "failing-model", "fog-of-war", "settings", "overlays", "screens", "enlarge", "game-time", "map-mouse-keys", "image-export", "dimensions", "saved-map", "recreated-world", "sub-maps");
+			return Set.of("tour", "radar", "xaero-icons", "model-faces", "waypoints", "icons", "xaero-import", "unnumbered-states", "failing-model", "fog-of-war", "settings", "overlays", "screens", "enlarge", "minimap-frames", "game-time", "map-mouse-keys", "image-export", "dimensions", "saved-map", "recreated-world", "sub-maps");
 			*///?}
 		}
 		return Set.of(env.split(","));
