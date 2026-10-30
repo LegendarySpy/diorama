@@ -69,7 +69,7 @@ The picture is 128 by 128 pixels, with a transparent background. It shows a map 
 - The next 12 pixels sit on top of the map, so corners and ornaments can reach in over it. Keep the rest of this strip transparent, or the player loses that much of the map.
 - Everything further in is ignored.
 
-**Square frames** keep their four 16 by 16 corners as drawn. The edges between them repeat from the middle of each side, so anything you put in the middle stays there. The picture's own edge is 96 pixels long; a pattern that repeats every 2, 3, 4, 6, 8, 12, 16, 24 or 32 pixels stays seamless at any size.
+**Square frames** keep their four 16 by 16 corners as drawn. The edges between them repeat from the middle of each side, so anything you put in the middle stays there. The picture's own edge is 96 pixels long, so a pattern that repeats every 2, 3, 4, 6, 8, 12, 16, 24 or 32 pixels stays seamless along it. On other minimap sizes the pattern gets cut where the edge meets a corner, so give the corners their own design rather than continuing the pattern into them.
 
 **Round frames** are a ring. Its outer edge touches the sides of the picture, and the map's edge is 4 pixels in from there. On a bigger or smaller minimap Diorama bends the ring to fit: it stays the same thickness and only gets longer or shorter around the circle. Anything you put at north, east, south or west stays there.
 

@@ -23,6 +23,8 @@ import net.minecraft.core.BlockPos;
 final class MinimapFrameTest {
 	/** The pack's gold line, a GUI pixel wide and 2 pixels in from the map's edge, so on top of the map. */
 	private static final int GOLD = 0xE8C14A;
+	/** Diorama's own rims, one pixel out from the map. Classic's is a little see-through. */
+	private static final int RIM = 0x8C8E90;
 	private static final int MARGIN = 6;
 
 	private MinimapFrameTest() {
@@ -122,10 +124,26 @@ final class MinimapFrameTest {
 	}
 
 	/**
-	 * Whether the pack's gold line shows, in the screen's own pixels: part way down the left side
-	 * (square), clear of the compass letter there, or on the diagonal (round, clear of the pack's gems).
+	 * Whether the pack's gold line shows and, without it, whether Diorama's own frame is back. Read
+	 * off the screen's own pixels, part way down the left side (square), clear of the compass letter
+	 * there, or on the diagonal (round), clear of the pack's gems.
 	 */
 	private static void check(ClientGameTestContext context, boolean gold, String what) {
+		BufferedImage shot = read(context.takeScreenshot("minimap-frames-check-" + what.replace(' ', '-').replace(",", "").replace("'", "")));
+		int line = pixel(context, shot, 2.5);
+		if (close(line, GOLD, 12) != gold) {
+			throw new AssertionError("Expected " + what + (gold ? " to show the gold line" : " not to show the pack's gold line")
+				+ ", got " + String.format("%06X", line));
+		}
+		// The rim's inner pixel, the same light grey in both of Diorama's frames, over whatever is behind it.
+		int rim = pixel(context, shot, -0.5);
+		if (!gold && !close(rim, RIM, 40)) {
+			throw new AssertionError("Expected " + what + " to show Diorama's own rim, got " + String.format("%06X", rim));
+		}
+	}
+
+	/** The screen pixel at a GUI position {@code in} from the map's edge, on a 96 wide minimap. */
+	private static int pixel(ClientGameTestContext context, BufferedImage shot, double in) {
 		boolean round = context.computeOnClient(mc -> Settings.get().minimapShape == Settings.Shape.ROUND);
 		double scale = context.computeOnClient(mc -> mc.getWindow().getGuiScale());
 		int guiWidth = context.computeOnClient(mc -> mc.getWindow().getGuiScaledWidth());
@@ -133,17 +151,14 @@ final class MinimapFrameTest {
 		double x = guiWidth - size - MARGIN;
 		double y = MARGIN;
 		double r = size / 2.0;
-		double in = 2.5;
 		double gx = round ? x + r - (r - in) * Math.sqrt(0.5) : x + in;
 		double gy = round ? y + r - (r - in) * Math.sqrt(0.5) : y + size / 4.0;
-		BufferedImage shot = read(context.takeScreenshot("minimap-frames-check-" + what.replace(' ', '-').replace(",", "").replace("'", "")));
-		int rgb = shot.getRGB((int) (gx * scale), (int) (gy * scale)) & 0xFFFFFF;
-		boolean close = Math.abs((rgb >> 16) - (GOLD >> 16)) <= 12 && Math.abs((rgb >> 8 & 0xFF) - (GOLD >> 8 & 0xFF)) <= 12
-			&& Math.abs((rgb & 0xFF) - (GOLD & 0xFF)) <= 12;
-		if (close != gold) {
-			throw new AssertionError("Expected " + what + (gold ? " to show the gold line" : " not to show the pack's gold line")
-				+ ", got " + String.format("%06X", rgb));
-		}
+		return shot.getRGB((int) (gx * scale), (int) (gy * scale)) & 0xFFFFFF;
+	}
+
+	private static boolean close(int rgb, int want, int within) {
+		return Math.abs((rgb >> 16) - (want >> 16)) <= within && Math.abs((rgb >> 8 & 0xFF) - (want >> 8 & 0xFF)) <= within
+			&& Math.abs((rgb & 0xFF) - (want & 0xFF)) <= within;
 	}
 
 	private static BufferedImage read(Path file) {

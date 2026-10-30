@@ -134,15 +134,16 @@ public final class MinimapFrames {
 		try (InputStream in = resource.get().open(); NativeImage image = NativeImage.read(in)) {
 			int width = image.getWidth();
 			int height = image.getHeight();
-			int[] argb = new int[width * height];
+			int edge = Math.max(width, height);
+			int[] abgr = new int[edge * edge];
 			for (int y = 0; y < height; y++) {
 				for (int x = 0; x < width; x++) {
-					argb[y * width + x] = WaypointIcons.argb(image, x, y);
+					int argb = WaypointIcons.argb(image, x, y);
+					abgr[y * edge + x] = (argb & 0xFF00FF00) | (argb >> 16 & 0xFF) | (argb & 0xFF) << 16;
 				}
 			}
-			int edge = Math.max(width, height);
 			MapTexture texture = MapTexture.create("diorama minimap frame", edge, 1);
-			texture.write(0, 0, 0, edge, PinArt.fromArgb(width, height, argb).abgr(edge));
+			texture.write(0, 0, 0, edge, abgr);
 			return new Picture(texture, (float) width / edge, (float) height / edge);
 		} catch (IOException | RuntimeException e) {
 			Diorama.LOGGER.warn("Can't read the minimap frame {}", file, e);
