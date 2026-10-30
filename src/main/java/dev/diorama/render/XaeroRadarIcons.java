@@ -129,8 +129,9 @@ public final class XaeroRadarIcons {
 	/** Reads the files again; runs on the game thread at the end of each resource reload. */
 	public static void reload(ResourceManager manager) {
 		load(manager);
-		// Waypoint icons are resources too; this listener is the one both loaders already register.
+		// Waypoint icons and the minimap's frame are resources too; this listener is the one both loaders already register.
 		WaypointIcons.reload();
+		MinimapFrames.reload();
 	}
 
 	private static void load(ResourceManager manager) {

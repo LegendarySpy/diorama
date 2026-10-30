@@ -68,7 +68,7 @@ Servers can limit Diorama with the same chat codes Xaero's Minimap uses. "Fair p
 
 - **Xaero's Minimap.** The waypoint list can import your Xaero waypoints, shared Xaero waypoints get an [Add] link, and on servers with Xaero's player tracking you can see far-away players on the map.
 - **Radar icon packs** made for Xaero's Minimap work in Diorama too. You can also make your own: see [Custom radar icons](docs/radar-icons.md).
-- **Resource packs** can redraw the waypoint icons or add new ones: an 11x11 picture in `assets/<namespace>/textures/waypoint_icons/`, with a dark outline, like the ones Diorama ships in `assets/diorama/textures/waypoint_icons/`.
+- **Resource packs** can redraw the waypoint icons or add new ones: an 11x11 picture in `assets/<namespace>/textures/waypoint_icons/`, with a dark outline, like the ones Diorama ships in `assets/diorama/textures/waypoint_icons/`. They can replace the minimap's frame too: see [Custom minimap frames](docs/minimap-frames.md).
 - **Waystones.** Waystones you've found show on the map in a folder of their own.
 - **FTB Chunks.** Claimed land shows on the map and minimap in its team's colour, with a stronger edge where the owner changes. Hover over it to see who owns it. Where the claims show is a setting under Overlays.
 - **Create copycats** (and Copycats+) show on the map as the block they copy.
