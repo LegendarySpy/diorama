@@ -1,8 +1,9 @@
 #!/bin/bash
 # Runs on a boat.dev VM, started by boat_run.py: installs what's missing, copies the pushed tree
-# from ~/src over ~/diorama (keeping its Gradle caches), runs one node's client game tests with
-# software rendering, and packs the results into ~/result.tgz. Its output goes to ~/sandbox.log and
-# its exit code to ~/run-exit, which boat_run.py polls for.
+# from ~/src over ~/diorama (keeping its Gradle caches) unless boat_run.py already brought ~/diorama
+# up to date with just the changed files, runs one node's client game tests with software
+# rendering, and packs the results into ~/result.tgz. Its output goes to ~/sandbox.log and its exit
+# code to ~/run-exit, which boat_run.py polls for.
 # usage: sandbox.sh <node> <tests|all> [KEY=VALUE...]
 set -u
 # One run per VM: a start the API reported as failed may have started after all.
@@ -15,6 +16,10 @@ trap 'echo $? > ~/run-exit' EXIT
 node=$1
 tests=$2
 shift 2
+# Lines of this log and of gradle.log start with the time; boat_run.py reads the run's phases off them.
+stamp() { while IFS= read -r line; do printf '%(%T)T %s\n' -1 "$line"; done; }
+mark() { printf '%(%T)T %s\n' -1 "$*"; }
+mark "started"
 
 if ! dpkg -s xvfb xauth libgl1-mesa-dri mesa-vulkan-drivers rsync >/dev/null 2>&1; then
 	echo "installing packages"
@@ -30,7 +35,9 @@ if [ ! -x ~/jdk25/bin/java ]; then
 fi
 
 mkdir -p ~/diorama
-rsync -a --delete --exclude .git --exclude .gradle --exclude build --exclude run --exclude logs ~/src/ ~/diorama/ || exit 1
+if [ -d ~/src ]; then
+	rsync -a --delete --exclude .git --exclude .gradle --exclude build --exclude run --exclude logs ~/src/ ~/diorama/ || exit 1
+fi
 cd ~/diorama || exit 1
 
 export JAVA_HOME=~/jdk25 GRADLE_OPTS=-Dorg.gradle.daemon=false
@@ -50,15 +57,20 @@ done
 run=versions/$node/build/run/clientGameTest
 rm -rf "$run/screenshots" "$run/crash-reports" "$run/logs" ~/result ~/result.tgz
 start=$(date +%s)
-echo "running :$node:runClientGameTest (tests: $tests)"
-# 90 min at most; boat_run.py passes TEST_SECONDS, what its own deadline leaves after setup.
-timeout --kill-after=60 "${TEST_SECONDS:-5400}" xvfb-run -a -s '-screen 0 1920x1080x24' bash ./gradlew --no-daemon --console=plain ":$node:runClientGameTest" > ~/gradle.log 2>&1
-code=$?
+mark "running :$node:runClientGameTest (tests: $tests)"
+# 90 min at most; boat_run.py passes TEST_SECONDS, what its own deadline leaves after setup. The
+# configuration cache skips configuring the build when a VM runs the same node again (about 15 s);
+# its problems are only warnings, so a build that can't use it still runs.
+timeout --kill-after=60 "${TEST_SECONDS:-5400}" xvfb-run -a -s '-screen 0 1920x1080x24' \
+	bash ./gradlew --no-daemon --console=plain --configuration-cache --configuration-cache-problems=warn \
+	":$node:runClientGameTest" 2>&1 | stamp > ~/gradle.log
+code=${PIPESTATUS[0]}
+mark "gradle finished"
 minutes=$(( ($(date +%s) - start) / 60 ))
 
 # Any failure packing the results fails the script, so the run isn't reported without its evidence.
 mkdir -p ~/result || exit 1
-cp ~/gradle.log ~/result/ || exit 1
+cp ~/gradle.log ~/sandbox.log ~/result/ || exit 1
 for part in screenshots crash-reports logs/latest.log; do
 	if [ -e "$run/$part" ]; then
 		cp -r "$run/$part" ~/result/ || exit 1

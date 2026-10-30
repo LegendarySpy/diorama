@@ -1,13 +1,17 @@
 """Run Diorama's client game tests on boat.dev VMs: software rendering, no GPU. See SKILL.md.
 
-usage: python boat_run.py <node[,node...]> --tests <sections|all> [--type default|large] [--env KEY=VALUE]... [--keep]
+usage: python boat_run.py <node[,node...]> --tests <sections|all> [--type default|large] [--env KEY=VALUE]...
+                           [--warm-minutes N] [--keep]
 
-Each node gets its own VM, started at the same time from the newest warmed snapshot. The script
-pushes this working tree (uncommitted changes included), runs :<node>:runClientGameTest, copies the
-results to build/boat-runs/<time>-<node>/ and deletes the VM. Exits non-zero if any node failed.
+Each node gets its own VM, started at the same time from the newest warmed snapshot, or the VM an
+earlier run from this checkout left warm. The script sends this working tree (uncommitted changes
+included), runs :<node>:runClientGameTest, copies the results to build/boat-runs/<time>-<node>/,
+and deletes the VM or leaves it warm for the next run. Exits non-zero if any node failed.
 """
 import argparse
 import concurrent.futures
+import hashlib
+import io
 import json
 import os
 import secrets
@@ -24,6 +28,8 @@ SNAPSHOT_PREFIX = 'diorama-gametest-'
 HERE = Path(__file__).resolve().parent
 SANDBOX_SH = '/home/user/src/.claude/skills/boat-game-test/sandbox.sh'
 TTL = 7200
+# How long a VM stays warm after a run, by default: see WARM_PREFIX.
+WARM_MINUTES = 10
 # SKILL.md gives the command 2 hours. sandbox.sh stops the tests at 90 min; every boat call is cut
 # off at 105 min so fetching results fits, and cleanup has the rest.
 WORK_MINUTES = 105
@@ -113,18 +119,92 @@ def tail(result):
     return (result.stdout + result.stderr).strip()[-2000:]
 
 
-def our_vms():
-    """[(name, id, state)] of this run's VMs on the account, stopped ones included; None when boat
-    list fails, which is not the same as having none."""
+def our_vms(prefix=None):
+    """[(name, id, state)] of this run's VMs on the account (or those named with `prefix`), stopped
+    ones included; None when boat list fails, which is not the same as having none."""
     listed = next(events(boat('list', '--all', '--json').stdout), None)
     if not listed or 'sandboxes' not in listed:
         return None
-    return [(v['name'], v['id'], v.get('state')) for v in listed['sandboxes'] if v.get('name', '').startswith(PREFIX)]
+    return [(v['name'], v['id'], v.get('state')) for v in listed['sandboxes'] if v.get('name', '').startswith(prefix or PREFIX)]
 
 
 def find_vm(name):
-    found = our_vms()
+    found = our_vms(name)
     return None if found is None else next((vm for n, vm, _ in found if n == name), '')
+
+
+# A warm VM is one a run left running for the next run from the same checkout, named
+# diorama-warm-<checkout>-<snapshot commit>-<node>. It has the node's build, Gradle's configuration
+# cache and the snapshot's files already read, so a rerun starts about a minute sooner and costs
+# no start. boat.dev archives it (stops it, keeping the disk) when the lifetime set after its last
+# run ends; a stopped warm VM is never used again, and the next run deletes it.
+WARM_PREFIX = 'diorama-warm-'
+CHECKOUT = ''
+# Warm VMs a running node is using, by name: deleted if the script is interrupted.
+warm_in_use = {}
+
+
+def warm_name(node, snapshot):
+    commit = snapshot[len(SNAPSHOT_PREFIX):] if snapshot and snapshot.startswith(SNAPSHOT_PREFIX) else 'none'
+    return f'{WARM_PREFIX}{CHECKOUT}-{commit}-{node}'
+
+
+def warm_lock(repo, node):
+    """An open lock file while this script owns the checkout's warm VM for `node`, else None: two
+    runs from one checkout at once can't share it, so the second gets a VM of its own."""
+    path = repo / 'build' / 'boat-runs' / f'warm-{node}.lock'
+    handle = open(path, 'a+')
+    try:
+        if os.name == 'nt':
+            import msvcrt
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        handle.close()
+        return None
+    return handle
+
+
+def take_warm(node, snapshot, size):
+    """This checkout's warm VM for the node, if one is running and was made from `snapshot` at this
+    size; deletes this checkout's others for the node (stopped, from an older snapshot)."""
+    found = our_vms(f'{WARM_PREFIX}{CHECKOUT}-') or []
+    want = warm_name(node, snapshot)
+    reuse = None
+    for name, vm, state in found:
+        # diorama-warm-<checkout>-<commit>-<node>
+        if name[len(WARM_PREFIX) + len(CHECKOUT) + 1:].split('-', 1)[-1] != node:
+            continue
+        if reuse is None and name == want and state in ('ready', 'idle', 'running'):
+            sandbox = next(events(boat('info', vm, '--json', timeout=30).stdout), {}).get('sandbox', {})
+            # Not while a run is on it: a script killed outright leaves its tests running there.
+            idle = next(events(boat('exec', vm, '--timeout', '30', '--json', '--', 'flock', '-n',
+                                    '/home/user/sandbox.lock', 'true').stdout), {}).get('exitCode') == 0
+            # Long enough for this run; set back to the warm time after it.
+            if idle and sandbox.get('type') == size and boat('extend', vm, '--ttl', str(TTL), '--json').returncode == 0:
+                reuse = vm
+                continue
+        if state not in GONE:
+            boat('delete', vm, '--yes', '--json')
+    return reuse
+
+
+def keep_warm(node, vm, minutes):
+    """Leaves the VM running for the next run, until boat.dev archives it `minutes` from now."""
+    if boat('extend', vm, '--ttl', str(minutes * 60), '--json').returncode:
+        return False
+    say(node, f'VM {vm} stays warm {minutes} min for the next run from this checkout (--warm-minutes 0 to delete it now)')
+    return True
+
+
+def clear_stopped_warm():
+    """Deletes warm VMs boat.dev archived when their time ran out, from any checkout: nothing
+    resumes them, and they'd sit on the account for 14 days. Never one that is running."""
+    for name, vm, state in our_vms(WARM_PREFIX) or []:
+        if state == 'stopped':
+            boat('delete', vm, '--yes', '--json')
 
 
 def settle(name, vm, vm_state):
@@ -186,6 +266,46 @@ def newest_snapshot():
     return max(named, key=lambda s: s['createdAt'])['name'] if named else None
 
 
+def git_paths(repo, command, *args):
+    found = subprocess.run(['git', command, '-z', *args], capture_output=True, cwd=repo)
+    if found.returncode:
+        return None
+    return [p for p in found.stdout.decode('utf-8', 'surrogateescape').split('\0') if p]
+
+
+def make_overlay(repo, base, into):
+    """A tarball of what this working tree changes from commit `base` (what the snapshot's
+    ~/diorama holds): changed and untracked files, and a list of deleted ones. None when git can't
+    tell, or when it's so big that a whole push is as quick."""
+    if subprocess.run(['git', 'cat-file', '-e', f'{base}^{{commit}}'], capture_output=True, cwd=repo).returncode:
+        return None
+    changed = git_paths(repo, 'diff', '--name-only', '--no-renames', base, '--')
+    untracked = git_paths(repo, 'ls-files', '--others', '--exclude-standard')
+    if changed is None or untracked is None:
+        return None
+    paths = sorted(set(changed) | set(untracked))
+    present = [p for p in paths if (repo / p).is_file()]
+    deleted = [p for p in paths if not (repo / p).exists()]
+    if sum((repo / p).stat().st_size for p in present) > 50_000_000:
+        return None
+    tgz = into / 'overlay.tgz'
+    with tarfile.open(tgz, 'w:gz') as tar:
+        for p in present:
+            tar.add(repo / p, arcname=p, recursive=False)
+        listing = ('\n'.join(deleted) + '\n').encode('utf-8', 'surrogateescape')
+        info = tarfile.TarInfo('.boat-overlay-deleted')
+        info.size = len(listing)
+        tar.addfile(info, io.BytesIO(listing))
+    return tgz, len(present), len(deleted)
+
+
+# Applies overlay.tgz over the snapshot's ~/diorama: newline-separated deletions, then CRLF off the
+# scripts (a Windows checkout has CRLF, which bash rejects). Safe to repeat.
+APPLY_OVERLAY = ('set -e; cd ~/diorama; tar xzf ~/overlay.tgz; '
+                 'if [ -s .boat-overlay-deleted ]; then xargs -d "\\n" rm -f < .boat-overlay-deleted; fi; '
+                 'rm -f .boat-overlay-deleted; sed -i "s/\\r$//" .claude/skills/boat-game-test/*.sh')
+
+
 def wait_for_start_slot():
     """Waits (on `boat limits`, which is free) until the account may start a VM this minute, so a
     start isn't refused: refused starts count against the limits too. Raises when the hour's or
@@ -211,10 +331,10 @@ def wait_for_start_slot():
         time.sleep(10)
 
 
-def create_vm(size, snapshot, what, ttl=TTL):
-    """A new VM named PREFIX + what. One start per call and no retry: a failed start that did make
-    a VM is found by name, and one that didn't fails the node."""
-    name = PREFIX + what
+def create_vm(size, snapshot, what, ttl=TTL, name=None):
+    """A new VM named PREFIX + what, or `name`. One start per call and no retry: a failed start that
+    did make a VM is found by name, and one that didn't fails the node."""
+    name = name or PREFIX + what
     wait_for_start_slot()
     if stop_starting.is_set():
         raise Refused('not starting: an earlier start was refused, or the script is stopping')
@@ -286,40 +406,74 @@ def run_script(vm, script, *args, deadline):
     raise RuntimeError(f'{script} was still running at the deadline')
 
 
+def push_tree(node, vm, repo, snapshot, reused, out):
+    """Brings the VM's ~/diorama up to this working tree; returns the sandbox.sh to run. A VM fresh
+    from the snapshot gets only what changed since the commit the snapshot was warmed on, a few
+    seconds instead of the 15 to 80 a whole push took; a reused VM, whose ~/diorama an earlier run
+    changed, gets the whole tree in ~/src, which sandbox.sh copies over ~/diorama."""
+    # Results of an earlier run on this VM could pass for this run's.
+    paths = ['/home/user/src', '/home/user/result', '/home/user/result.tgz', '/home/user/overlay.tgz']
+    cleared = boat_retry('exec', vm, '--timeout', '120', '--', 'rm', '-rf', *paths)
+    if cleared.returncode:
+        raise RuntimeError(f'could not clear the VM: {tail(cleared)}')
+    base = snapshot[len(SNAPSHOT_PREFIX):] if snapshot and snapshot.startswith(SNAPSHOT_PREFIX) else None
+    overlay = make_overlay(repo, base, out) if base and not reused else None
+    if overlay:
+        tgz, files, deleted = overlay
+        sent = boat_retry('scp', tgz.name, f'{vm}:/home/user/overlay.tgz', cwd=tgz.parent, timeout=300)
+        tgz.unlink()
+        if sent.returncode:
+            raise RuntimeError(f'boat scp of the changed files failed: {tail(sent)}')
+        applied = boat_retry('exec', vm, '--timeout', '120', '--', 'bash', '-c', APPLY_OVERLAY)
+        if applied.returncode:
+            raise RuntimeError(f'could not apply the changed files: {tail(applied)}')
+        say(node, f'sent {files} changed files and {deleted} deletions since {base}')
+        return '/home/user/diorama/.claude/skills/boat-game-test/sandbox.sh'
+    pushed = boat_retry('push', vm, str(repo), '--to', '/home/user/src', timeout=300)
+    if pushed.returncode:
+        raise RuntimeError(f'boat push failed: {tail(pushed)}')
+    # A Windows checkout can have CRLF line endings, which bash rejects.
+    normalized = boat_retry('exec', vm, '--timeout', '60', '--', 'sed', '-i', r's/\r$//', SANDBOX_SH)
+    if normalized.returncode:
+        raise RuntimeError(f'could not prepare sandbox.sh: {tail(normalized)}')
+    return SANDBOX_SH
+
+
 def run_node(node, args, repo, snapshot, start):
     out = repo / 'build' / 'boat-runs' / f'{time.strftime("%Y%m%d-%H%M%S")}-{PREFIX}{node}'
     out.mkdir(parents=True)
     name = PREFIX + node
     if args.keep:
         keep_names.add(name)
-    vm = create_vm(args.type, snapshot, node)
-    say(node, f'VM {vm} ({args.type}) ready after {time.time() - start:.0f} s')
+    lock = warm_lock(repo, node) if args.warm_minutes and not args.keep else None
+    vm = take_warm(node, snapshot, args.type) if lock else None
+    reused = vm is not None
+    if lock:
+        name = warm_name(node, snapshot)
+        warm_in_use[name] = vm
+    if not vm:
+        vm = create_vm(args.type, snapshot, node, name=name)
+        if lock:
+            warm_in_use[name] = vm
+    say(node, f'VM {vm} ({args.type}) {"reused, warm" if reused else "ready"} after {time.time() - start:.0f} s')
+    ready = time.time() - start
     ran = False
+    done = False
     try:
         if interrupted.is_set():
             raise RuntimeError('stopped: the script was interrupted')
-        if not args.no_prefetch:
+        if not args.no_prefetch and not reused:
             boat('exec', vm, '--detach', '--json', '--', 'bash', '-c', PREFETCH.format(node=node))
-        # The snapshot's copy and results: push only adds files, and an old result.tgz could pass for this run's.
-        cleared = boat_retry('exec', vm, '--timeout', '120', '--', 'rm', '-rf', '/home/user/src', '/home/user/result',
-                             '/home/user/result.tgz')
-        if cleared.returncode:
-            raise RuntimeError(f'could not clear the VM: {tail(cleared)}')
-        pushed = boat_retry('push', vm, str(repo), '--to', '/home/user/src', timeout=300)
-        if pushed.returncode:
-            raise RuntimeError(f'boat push failed: {tail(pushed)}')
-        # A Windows checkout can have CRLF line endings, which bash rejects.
-        normalized = boat_retry('exec', vm, '--timeout', '60', '--', 'sed', '-i', r's/\r$//', SANDBOX_SH)
-        if normalized.returncode:
-            raise RuntimeError(f'could not prepare sandbox.sh: {tail(normalized)}')
-        say(node, f'pushed after {time.time() - start:.0f} s; running {args.tests}')
+        script = push_tree(node, vm, repo, snapshot, reused, out)
+        pushed = time.time() - start
+        say(node, f'pushed after {pushed:.0f} s; running {args.tests}')
         # The tests get what's left after setup, less 2 min to pack the results and 10 to fetch
         # them and delete the VM.
         test_seconds = int(min(5400, work_deadline - 720 - time.time()))
         if test_seconds < 300:
             raise RuntimeError('setup took so long that no time is left for the tests')
         ran = True
-        code, log = run_script(vm, SANDBOX_SH, node, args.tests, *args.env, f'TEST_SECONDS={test_seconds}',
+        code, log = run_script(vm, script, node, args.tests, *args.env, f'TEST_SECONDS={test_seconds}',
                                deadline=work_deadline - 600)
         (out / 'vm.log').write_text(log, encoding='utf-8')
         if code:
@@ -331,21 +485,33 @@ def run_node(node, args, repo, snapshot, start):
             tar.extractall(out, filter='data')
         (out / 'result.tgz').unlink()
         usage = next(events(boat('usage', vm, '--json', timeout=30).stdout), {})
+        done = True
     except Exception:
         # Once the tests ran, the VM holds their evidence: keep it, stopped, rather than lose it.
         if ran and not interrupted.is_set():
+            # Out of the warm name, so the next run doesn't delete it with the evidence.
+            if name.startswith(WARM_PREFIX) and boat('rename', vm, PREFIX + node, '--json').returncode == 0:
+                warm_in_use.pop(name, None)
+                name = PREFIX + node
             keep_names.add(name)
             say(node, f'!! keeping VM {vm} with what the run left in ~/result.tgz and ~/sandbox.log: '
                       f'boat resume {vm}, boat scp {vm}:/home/user/result.tgz ., then boat delete {vm} --yes')
         raise
     finally:
         # A failure here is caught by reconcile() at the end.
-        boat('stop' if name in keep_names else 'delete', vm, '--json', *([] if name in keep_names else ['--yes']))
+        if done and lock and not interrupted.is_set() and keep_warm(node, vm, args.warm_minutes):
+            warm_in_use.pop(name, None)
+        else:
+            warm_in_use.pop(name, None)
+            boat('stop' if name in keep_names else 'delete', vm, '--json', *([] if name in keep_names else ['--yes']))
+        if lock:
+            lock.close()
 
     result = json.loads((out / 'result.json').read_text())
     shots = sorted((out / 'screenshots').glob('*.png')) if (out / 'screenshots').exists() else []
     say(node, f'exit={result["exit"]} after {result["minutes"]} min of tests, '
               f'{(time.time() - start) / 60:.0f} min in all, ${usage.get("dollars", 0):.3f}')
+    say(node, f'time: {timings(out, node, ready, pushed)}')
     say(node, f'{len(shots)} screenshots in {out / "screenshots"}')
     if result['exit']:
         lines = (out / 'gradle.log').read_text(encoding='utf-8', errors='replace').splitlines()
@@ -353,6 +519,46 @@ def run_node(node, args, repo, snapshot, start):
         say(node, '\n  '.join(['failure lines:', *cause[:8]]))
         say(node, f'full output: {out / "gradle.log"}; game log: {out / "latest.log"}')
     return result['exit']
+
+
+def first_time(path, *needles):
+    """Seconds since midnight of the first line in the log that holds every needle, read off the
+    time at its start ('12:34:56 ...' from sandbox.sh, '[12:34:56] ...' from the game), or None."""
+    if not path.exists():
+        return None
+    for line in path.read_text(encoding='utf-8', errors='replace').splitlines():
+        if all(n in line for n in needles):
+            clock = line.lstrip('[')[:8]
+            try:
+                h, m, s = (int(p) for p in clock.split(':'))
+            except ValueError:
+                continue
+            return h * 3600 + m * 60 + s
+    return None
+
+
+def timings(out, node, ready, pushed):
+    """Where the run's time went, from the VM's logs: one line, phases that can't be told left out.
+    ready and pushed are seconds from the script's start; the rest is read off the VM's clock."""
+    marks = [
+        ('Gradle', first_time(out / 'sandbox.log', 'running :')),
+        ('game start', first_time(out / 'gradle.log', f'Task :{node}:runClientGameTest')),
+        ('world', first_time(out / 'gradle.log', 'Starting integrated minecraft server')),
+        ('map warm-up', first_time(out / 'gradle.log', 'joined the game')),
+        ('tests', first_time(out / 'gradle.log', 'Map warm-up done')),
+        (None, first_time(out / 'sandbox.log', 'gradle finished')),
+    ]
+    started = first_time(out / 'sandbox.log', 'started')
+    # The push takes in copying the tree into place on the VM.
+    copied = (marks[0][1] - started) % 86400 if started is not None and marks[0][1] is not None else 0
+    parts = [f'VM {ready:.0f} s', f'push {pushed - ready + copied:.0f} s']
+    for (name, at), (_, end) in zip(marks, marks[1:]):
+        if at is not None and end is not None:
+            parts.append(f'{name} {(end - at) % 86400} s')
+    warm = marks[4][1]
+    if started is not None and warm is not None:
+        parts.append(f'first test after {pushed + (warm - started) % 86400:.0f} s')
+    return ', '.join(parts)
 
 
 def interrupt_on_signals():
@@ -374,6 +580,9 @@ def main():
     parser.add_argument('--env', action='append', default=[], help='extra KEY=VALUE for the game, e.g. DIORAMA_GIF=1')
     parser.add_argument('--keep', action='store_true', help='stop the VM instead of deleting it, to look around after')
     parser.add_argument('--snapshot', help='saved snapshot to start from (default: the newest diorama-gametest-*)')
+    parser.add_argument('--warm-minutes', type=int,
+                        help='keep each VM running this long after the run, for the next run from this checkout '
+                             f'(default {WARM_MINUTES} for up to 3 nodes, else 0; 0 deletes it at once)')
     parser.add_argument('--no-prefetch', action='store_true', help=argparse.SUPPRESS)
     args = parser.parse_args()
     sys.stdout.reconfigure(line_buffering=True)
@@ -384,13 +593,19 @@ def main():
     missing = [n for n in nodes if not (repo / 'versions' / n).is_dir()]
     if missing:
         sys.exit(f'no node versions/{", ".join(missing)}')
+    if args.warm_minutes is None:
+        args.warm_minutes = WARM_MINUTES if len(nodes) <= 3 else 0
+    global CHECKOUT
+    CHECKOUT = hashlib.sha1(str(repo).lower().encode()).hexdigest()[:6]
 
     snapshot = args.snapshot or newest_snapshot()
     if snapshot:
         say(None, f'starting from snapshot {snapshot}')
     else:
         say(None, f'no {SNAPSHOT_PREFIX}* snapshot: each VM sets up from scratch (about 5 min more)')
-    say(None, f'this run\'s VMs are named {PREFIX}<node>')
+    say(None, f'this run\'s VMs are named {PREFIX}<node>'
+              + (f', or {WARM_PREFIX}{CHECKOUT}-<snapshot>-<node> while warm' if args.warm_minutes else ''))
+    clear_stopped_warm()
 
     interrupt_on_signals()
     start = time.time()
@@ -424,6 +639,11 @@ def main():
         for t in threads:
             if t.is_alive():
                 t.join(max(0, until - time.time()))
+        # Warm VMs in use when the run stopped are in an unknown state.
+        for name in list(warm_in_use):
+            for _, vm, state in our_vms(name) or []:
+                if state not in GONE:
+                    boat('delete', vm, '--yes', '--json')
         reconcile(rounds=2)
         sys.exit(130)
     reconcile()
