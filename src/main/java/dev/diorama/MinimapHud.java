@@ -16,6 +16,7 @@ import dev.diorama.waypoint.WaypointOverlay;
 import dev.diorama.waypoint.WaypointStore;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElement;
 //? if >=1.21 {
 import net.minecraft.client.DeltaTracker;
@@ -33,7 +34,8 @@ import net.minecraft.world.phys.Vec3;
 
 /**
  * The minimap, centred on the player, in the corner the settings pick, square or round. Compass
- * letters sit on its edges, and coordinates and the biome sit on the side away from the screen edge.
+ * letters sit on its edges, and coordinates, the biome and the game time sit on the side away from
+ * the screen edge.
  */
 public final class MinimapHud implements HudElement {
 	private static final int MARGIN = 6;
@@ -45,6 +47,9 @@ public final class MinimapHud implements HudElement {
 	 * half a second to bake and a new slice can need four at once, so this leaves room for that.
 	 */
 	private static final long LAYER_HOLD_MS = 3000;
+	private static final int INFO_COLOR = 0xFFFFFFFF;
+	/** The game time once it's dark enough for a bed, which can be earlier than the clock says in a storm. */
+	private static final int BED_TIME_COLOR = 0xFF9CC4FF;
 
 	private final MapViewport viewport = new MapViewport();
 	private final DrawingOverlay drawings = new DrawingOverlay();
@@ -158,7 +163,7 @@ public final class MinimapHud implements HudElement {
 		Settings settings = Settings.get();
 		Vec3 pos = player.getPosition(partialTick);
 		Font font = mc.font;
-		List<String> info = this.infoLines(settings, player, mc);
+		List<InfoLine> info = this.infoLines(settings, player, mc);
 		int infoHeight = info.size() * 10;
 		int size = this.fit(wanted, graphics.guiWidth(), graphics.guiHeight(), top, effects, infoHeight);
 		int x = right ? graphics.guiWidth() - size - MARGIN : MARGIN;
@@ -192,10 +197,10 @@ public final class MinimapHud implements HudElement {
 		int textY = y + size + 4;
 		int left = x - 2;
 		int textRight = x + size + 2;
-		for (String line : info) {
-			int w = font.width(line);
+		for (InfoLine line : info) {
+			int w = font.width(line.text());
 			int tx = right ? x + size - w : x;
-			graphics.text(font, line, tx, textY, 0xFFFFFFFF, true);
+			graphics.text(font, line.text(), tx, textY, line.color(), true);
 			left = Math.min(left, tx - 1);
 			textRight = Math.max(textRight, tx + w + 1);
 			textY += 10;
@@ -260,17 +265,48 @@ public final class MinimapHud implements HudElement {
 		graphics.text(font, letter, cx - w / 2, y, color, false);
 	}
 
-	private List<String> infoLines(Settings settings, LocalPlayer player, Minecraft mc) {
-		List<String> lines = new ArrayList<>();
+	private List<InfoLine> infoLines(Settings settings, LocalPlayer player, Minecraft mc) {
+		List<InfoLine> lines = new ArrayList<>();
 		BlockPos pos = player.blockPosition();
 		if (settings.coordinates) {
-			lines.add(pos.getX() + ", " + pos.getY() + ", " + pos.getZ());
+			lines.add(new InfoLine(pos.getX() + ", " + pos.getY() + ", " + pos.getZ(), INFO_COLOR));
 		}
 		if (settings.biome) {
 			mc.level.getBiome(pos).unwrapKey().ifPresent(key ->
-				lines.add(Component.translatable(key.identifier().toLanguageKey("biome")).getString()));
+				lines.add(new InfoLine(Component.translatable(key.identifier().toLanguageKey("biome")).getString(), INFO_COLOR)));
+		}
+		if (settings.gameTime != Settings.GameTime.OFF) {
+			//? if <1.21.2 {
+			/*// Until 1.21.2 the client worked this out only when a level loaded.
+			mc.level.updateSkyBrightness();
+			*///?}
+			// The Overworld's clock in every dimension, as Xaero's Minimap reads it: the Nether and
+			// the End have no day of their own, and this is when the player's bed would work.
+			lines.add(new InfoLine(gameTime(settings.gameTime, mc.level.getOverworldClockTime()), mc.level.isDarkOutside() ? BED_TIME_COLOR : INFO_COLOR));
 		}
 		return lines;
+	}
+
+	/**
+	 * The clock's ticks as Xaero's Minimap writes them. Tick 0 is 06:00 on day 1, so a new day starts
+	 * at midnight, not at sunrise as in the game's own day count.
+	 */
+	public static String gameTime(Settings.GameTime format, long ticks) {
+		long sinceMidnight = ticks + 6000;
+		long day = Math.floorDiv(sinceMidnight, 24000) + 1;
+		int inDay = Math.floorMod(sinceMidnight, 24000);
+		int hour = inDay / 1000;
+		int minute = inDay % 1000 * 60 / 1000;
+		boolean twelveHour = format == Settings.GameTime.DAY_12H || format == Settings.GameTime.ONLY_12H;
+		String time = twelveHour
+			? String.format(Locale.ROOT, "%02d:%02d %s", hour % 12 == 0 ? 12 : hour % 12, minute, hour < 12 ? "AM" : "PM")
+			: String.format(Locale.ROOT, "%02d:%02d", hour, minute);
+		boolean withDay = format == Settings.GameTime.DAY_24H || format == Settings.GameTime.DAY_12H;
+		return withDay ? Component.translatable("diorama.minimap.day", day, time).getString() : time;
+	}
+
+	/** A line under the minimap. */
+	private record InfoLine(String text, int color) {
 	}
 
 	/** Vanilla draws status effect icons in the top-right corner; move the minimap below them. */

@@ -43,6 +43,8 @@ stonecutter parameters {
 		// Fabric API's payload type registries.
 		"\\bPayloadTypeRegistry\\.clientboundPlay\\(" to "PayloadTypeRegistry.playS2C(",
 		"\\bPayloadTypeRegistry\\.serverboundPlay\\(" to "PayloadTypeRegistry.playC2S(",
+		// The day's clock was the level's.
+		"\\.getOverworldClockTime\\(\\)" to ".getDayTime()",
 		// Chat lines moved into the multiplayer chat package.
 		"net\\.minecraft\\.client\\.multiplayer\\.chat\\.GuiMessage\\b" to "net.minecraft.client.GuiMessage",
 	)
@@ -97,6 +99,7 @@ stonecutter parameters {
 		"\\bgamerule show_death_messages\\b" to "gamerule showDeathMessages",
 		"\\bgamerule immediate_respawn\\b" to "gamerule doImmediateRespawn",
 		"\\bgamerule random_tick_speed\\b" to "gamerule randomTickSpeed",
+		"\\bgamerule advance_time\\b" to "gamerule doDaylightCycle",
 		// The F3 screen's on/off switch was named after the key.
 		"\\bdebugEntries\\.isOverlayVisible\\(\\)" to "debugEntries.isF3Visible()",
 		"\\bdebugEntries\\.toggleDebugOverlay\\(\\)" to "debugEntries.toggleF3Visible()",
@@ -150,6 +153,8 @@ stonecutter parameters {
 		"\\bnew HoverEvent\\.ShowText\\(" to "new HoverEvent(HoverEvent.Action.SHOW_TEXT, ",
 		// Placing an entity (the tests do) was moving it.
 		"\\.snapTo\\(" to ".moveTo(",
+		// Whether it's dark enough to sleep was named after the night.
+		"\\.isDarkOutside\\(\\)" to ".isNight()",
 	)
 	for ((pattern, older) in before1_21_5) {
 		replacements.regex(current.parsed < "1.21.5") {

@@ -186,6 +186,9 @@ public class DioramaClientTest implements FabricClientGameTest {
 			if (tests.contains("map-mouse-keys")) {
 				MapMouseKeysTest.run(context);
 			}
+			if (tests.contains("game-time")) {
+				GameTimeTest.run(context, world);
+			}
 			if (tests.contains("image-export")) {
 				ImageExportTest.run(context, world);
 			}
@@ -232,6 +235,11 @@ public class DioramaClientTest implements FabricClientGameTest {
 		if (tests.contains("multiplayer")) {
 			multiplayer(context);
 		}
+		//? if >=1.21.4 && fabric {
+		if (tests.contains("game-time-server")) {
+			GameTimeTest.onServer(context);
+		}
+		//?}
 		// The server's side of Xaero's channels goes through Fabric API networking, so these run on
 		// Fabric only, and from 1.21, whose networking has payload types. On NeoForge and on 1.20.1
 		// the shim can't start a dedicated server anyway.
@@ -1401,7 +1409,7 @@ public class DioramaClientTest implements FabricClientGameTest {
 		});
 	}
 
-	private static java.util.Properties serverProperties() {
+	static java.util.Properties serverProperties() {
 		java.util.Properties properties = new java.util.Properties();
 		properties.setProperty("server-port", String.valueOf(SERVER_PORT));
 		properties.setProperty("gamemode", "creative");
@@ -5496,10 +5504,10 @@ public class DioramaClientTest implements FabricClientGameTest {
 		}
 		if (env == null || env.isBlank()) {
 			//? if >=1.21.4 && fabric {
-			return Set.of("tour", "radar", "xaero-icons", "model-faces", "waypoints", "icons", "xaero-import", "unnumbered-states", "failing-model", "fog-of-war", "settings", "overlays", "screens", "enlarge", "minimap-frames", "map-mouse-keys", "image-export", "dimensions", "saved-map", "recreated-world", "sub-maps", "multiplayer", "server-id", "tracked-players", "realms");
+			return Set.of("tour", "radar", "xaero-icons", "model-faces", "waypoints", "icons", "xaero-import", "unnumbered-states", "failing-model", "fog-of-war", "settings", "overlays", "screens", "enlarge", "minimap-frames", "game-time", "map-mouse-keys", "image-export", "dimensions", "saved-map", "recreated-world", "sub-maps", "multiplayer", "game-time-server", "server-id", "tracked-players", "realms");
 			//?} else {
 			/*// On NeoForge and before 1.21.4 the tests run on src/gameshim, which can't start a dedicated server.
-			return Set.of("tour", "radar", "xaero-icons", "model-faces", "waypoints", "icons", "xaero-import", "unnumbered-states", "failing-model", "fog-of-war", "settings", "overlays", "screens", "enlarge", "minimap-frames", "map-mouse-keys", "image-export", "dimensions", "saved-map", "recreated-world", "sub-maps");
+			return Set.of("tour", "radar", "xaero-icons", "model-faces", "waypoints", "icons", "xaero-import", "unnumbered-states", "failing-model", "fog-of-war", "settings", "overlays", "screens", "enlarge", "minimap-frames", "game-time", "map-mouse-keys", "image-export", "dimensions", "saved-map", "recreated-world", "sub-maps");
 			*///?}
 		}
 		return Set.of(env.split(","));
@@ -5594,7 +5602,7 @@ public class DioramaClientTest implements FabricClientGameTest {
 	}
 
 	/** Clicks the middle of the widget with this label, as a player would. */
-	private static void click(ClientGameTestContext context, String label) {
+	static void click(ClientGameTestContext context, String label) {
 		clickAt(context, label, 0.5);
 	}
 
