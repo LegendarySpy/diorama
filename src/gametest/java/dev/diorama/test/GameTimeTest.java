@@ -108,7 +108,11 @@ final class GameTimeTest {
 		world.getServer().runCommand("execute in minecraft:overworld run tp @a 0 100 0");
 		context.waitFor(mc -> MapSession.get() != null && mc.level.dimension() == Level.OVERWORLD, 2400);
 		world.getServer().runCommand("time set noon");
-		context.runOnClient(mc -> Settings.get().gameTime = GameTime.OFF);
+		context.runOnClient(mc -> {
+			Settings.get().gameTime = GameTime.OFF;
+			// The click saved its choice, and the next run starts from what's saved.
+			Settings.get().save();
+		});
 	}
 
 	/** The same clock on a dedicated server, where /skipnight lives: sent over the network, stopped and started by the server. */
