@@ -435,7 +435,8 @@ public final class MapScreen extends Screen {
 	@Override
 	public boolean mouseClicked(MouseButtonEvent event, boolean doubleClick) {
 		this.draw.anyPress(event.x(), event.y());
-		return this.menuPressed(event.x(), event.y(), event.button()) || this.clicked(super.mouseClicked(event, doubleClick), event.x(), event.y(), event.button());
+		return this.boundPressed(event.button(), DioramaClient.WAYPOINT_LIST.matchesMouse(event), DioramaClient.OPEN_MAP.matchesMouse(event))
+			|| this.menuPressed(event.x(), event.y(), event.button()) || this.clicked(super.mouseClicked(event, doubleClick), event.x(), event.y(), event.button());
 	}
 
 	@Override
@@ -457,7 +458,8 @@ public final class MapScreen extends Screen {
 	/*@Override
 	public boolean mouseClicked(double x, double y, int button) {
 		this.draw.anyPress(x, y);
-		return this.menuPressed(x, y, button) || this.clicked(super.mouseClicked(x, y, button), x, y, button);
+		return this.boundPressed(button, DioramaClient.WAYPOINT_LIST.matchesMouse(button), DioramaClient.OPEN_MAP.matchesMouse(button))
+			|| this.menuPressed(x, y, button) || this.clicked(super.mouseClicked(x, y, button), x, y, button);
 	}
 
 	@Override
@@ -476,6 +478,19 @@ public final class MapScreen extends Screen {
 			|| super.keyPressed(key, scancode, modifiers);
 	}
 	*///?}
+
+	/**
+	 * A mouse button bound to one of the map's keys, checked before the menu and the widgets as a key
+	 * is: widgets only click with the left button. The map is used with the left and right buttons,
+	 * and pans with the middle one while drawing, so a binding on those does nothing here.
+	 */
+	private boolean boundPressed(int button, boolean waypointListKey, boolean mapKey) {
+		if (button == InputConstants.MOUSE_BUTTON_LEFT || button == InputConstants.MOUSE_BUTTON_RIGHT
+			|| (button == InputConstants.MOUSE_BUTTON_MIDDLE && this.draw.active())) {
+			return false;
+		}
+		return this.bindingPressed(waypointListKey, mapKey);
+	}
 
 	/**
 	 * A press while the menu is open, which the widgets don't get: on the menu it's for the menu,
@@ -805,12 +820,7 @@ public final class MapScreen extends Screen {
 			return this.draw.key(key, this.dimension());
 		}
 		// The player's own bindings come before the map's fixed keys, so Open map rebound to C still closes it.
-		if (waypointListKey) {
-			this.minecraft.gui.setScreen(new WaypointListScreen(this));
-			return true;
-		}
-		if (mapKey) {
-			this.onClose();
+		if (this.bindingPressed(waypointListKey, mapKey)) {
 			return true;
 		}
 		if (key == InputConstants.KEY_ESCAPE && this.menu != null) {
@@ -844,6 +854,18 @@ public final class MapScreen extends Screen {
 				}
 			default -> {
 			}
+		}
+		return false;
+	}
+
+	private boolean bindingPressed(boolean waypointListKey, boolean mapKey) {
+		if (waypointListKey) {
+			this.minecraft.gui.setScreen(new WaypointListScreen(this));
+			return true;
+		}
+		if (mapKey) {
+			this.onClose();
+			return true;
 		}
 		return false;
 	}
