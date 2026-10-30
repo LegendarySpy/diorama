@@ -80,12 +80,12 @@ final class MapMouseKeysTest {
 		context.getInput().pressMouse(MOUSE_5);
 		context.waitTicks(5);
 		check(wrong, closed(context), "Mouse 5 while typing a note didn't close the map");
-		context.setScreen(() -> null);
 		Drawing note = context.computeOnClient(mc -> {
 			List<Drawing> drawings = DrawingStore.get().in(dimension);
 			return drawings.isEmpty() ? null : drawings.get(drawings.size() - 1);
 		});
 		check(wrong, note != null && note.kind == Drawing.Kind.NOTE && note.text.equals("Kept"), "A half-typed note was lost when Mouse 5 closed the map");
+		context.setScreen(() -> null);
 		if (note != null) {
 			context.runOnClient(mc -> DrawingStore.get().remove(note));
 		}
@@ -168,7 +168,8 @@ final class MapMouseKeysTest {
 		moveTo(context, new double[] {from[0] + 30, from[1]});
 		context.getInput().releaseMouse(button);
 		context.waitTicks(2);
-		return centre(context) != before;
+		double after = centre(context);
+		return !Double.isNaN(before) && !Double.isNaN(after) && after != before;
 	}
 
 	private static double centre(ClientGameTestContext context) {
