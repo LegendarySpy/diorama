@@ -154,6 +154,7 @@ public final class SettingsScreen extends Screen {
 		look.toggle("outlines", () -> s.outlines, v -> s.outlines = v);
 		look.toggle("rounded_fog", () -> s.roundedFog, v -> s.roundedFog = v);
 		look.toggle("fog_of_war", () -> s.alwaysFogOfWar, v -> s.alwaysFogOfWar = v);
+		look.toggle("saved_chunks", () -> s.mapSavedChunks, v -> s.mapSavedChunks = v);
 		Settings.Quality[] qualities = Settings.Quality.values();
 		look.cycle("quality", () -> s.quality.ordinal(), qualities.length, i -> s.quality = qualities[i],
 			i -> Component.translatable("diorama.settings.quality." + qualities[i].name().toLowerCase(Locale.ROOT)));

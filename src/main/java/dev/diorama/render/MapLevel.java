@@ -77,10 +77,13 @@ public final class MapLevel implements ChunkSource {
 	private final SeenBlocks seen;
 	/** Where this dimension's map is saved, or null when there's no world to save it for. */
 	private final @Nullable Path folder;
-	/** Saved tiles for the current camera angle, or null when nothing is saved. Render thread. */
-	private @Nullable TileStore store;
+	/**
+	 * Saved tiles for the current camera angle, or null when nothing is saved. Changed on the
+	 * render thread; {@link SavedChunkImport} reads it from its own.
+	 */
+	private volatile @Nullable TileStore store;
 	/** The folder {@link #store} saves into; see {@link #storeName()}. */
-	private String storeName = "";
+	private volatile String storeName = "";
 	private volatile boolean fogOfWar;
 	/** What bakes record for the map overlays, or null when no overlay is on. */
 	private volatile @Nullable Overlays overlays;
@@ -100,6 +103,23 @@ public final class MapLevel implements ChunkSource {
 	private final Map<TileKey, Double> wanted = new HashMap<>();
 	private final Set<TileKey> inFlight = new HashSet<>();
 	private final ConcurrentLinkedQueue<TileImage> finished = new ConcurrentLinkedQueue<>();
+	/** Tiles drawn from the world's save, waiting for the render thread to take them. */
+	private final ConcurrentLinkedQueue<SavedTile> fromSave = new ConcurrentLinkedQueue<>();
+	/** The tile {@link SavedChunkImport} is baking, and whether a live bake finished for it since it started. */
+	private volatile @Nullable TileKey savedTileBaking;
+	private volatile boolean savedTileRaced;
+	/** Chunks loaded live whose tiles may not be saved yet, while {@link SavedChunkImport} is watching. */
+	private final Set<Long> liveChunks = new HashSet<>();
+	/** Chunks loaded live with their tiles saved, for {@link SavedChunkImport} to take. */
+	private final ConcurrentLinkedQueue<Long> liveChunksSaved = new ConcurrentLinkedQueue<>();
+	private volatile boolean watchingLiveChunks;
+	/** The live chunks are checked this often: they're as many as the player loads. */
+	private static final long LIVE_CHECK_MS = 2000;
+	private long lastLiveCheckMs;
+	/** Where the views last looked, in map space, and when; see {@link #importFocus()}. */
+	private volatile double focusU;
+	private volatile double focusV;
+	private volatile long focusMs;
 	/** Overview tiles the writer rebuilt; reloaded when next wanted. */
 	private final ConcurrentLinkedQueue<TileKey> overviewChanged = new ConcurrentLinkedQueue<>();
 	/** Overview tiles with nothing saved under them; not asked for again until that changes. */
@@ -341,6 +361,9 @@ public final class MapLevel implements ChunkSource {
 	 */
 	public void put(ChunkSnapshot snapshot, int @Nullable [] changed, int playerChunkX, int playerChunkZ) {
 		this.chunks.put(snapshot.key(), snapshot);
+		if (changed == null && this.watchingLiveChunks) {
+			this.liveChunks.add(snapshot.key());
+		}
 		if (snapshot.maxY != Integer.MIN_VALUE && snapshot.maxY + 1 > this.topY) {
 			this.topY = Math.min(this.maxY, snapshot.maxY + 1);
 		}
@@ -559,54 +582,15 @@ public final class MapLevel implements ChunkSource {
 		}
 		TileImage image;
 		while ((image = this.finished.poll()) != null) {
-			this.inFlight.remove(image.key());
-			if (SLOT_STATS) {
-				this.slotReleased(image.key());
+			this.bakeFinished(image);
+			// After the image reached the store, so a tile from the save either reads it or hears of it.
+			if (image.key().equals(this.savedTileBaking)) {
+				this.savedTileRaced = true;
 			}
-			boolean background = this.backgroundBakes.remove(image.key());
-			if (this.closed) {
-				continue;
-			}
-			if (image.generation() != this.generation(image.key())) {
-				// Baked under old colours or the other cave mode; bake it again.
-				MapTile stale = this.tiles.remove(image.key());
-				if (stale != null) {
-					stale.close();
-					this.coverageVersion++;
-				}
-				if (background) {
-					this.unsaved.put(image.key(), 0L);
-				}
-				continue;
-			}
-			MapTile tile = this.tiles.get(image.key());
-			if (background && tile == null) {
-				// Baked only to be saved; a map that wants it will bake it again.
-				if (this.store != null) {
-					this.store.baked(image);
-					this.pixelsMoved(image.key());
-				}
-				continue;
-			}
-			if (tile == null) {
-				if (image.key().lod() > 0 && !image.isFull()) {
-					if (!this.dirty.containsKey(image.key())) {
-						this.emptyOverviews.add(image.key());
-					}
-				}
-				if (!image.isFull()) {
-					// The tile was evicted while its patch baked.
-					continue;
-				}
-				tile = new MapTile();
-				this.tiles.put(image.key(), tile);
-			}
-			tile.upload(image);
-			this.pixelsMoved(image.key());
-			this.coverageVersion++;
-			if (this.store != null && !image.key().isCave() && image.key().lod() == 0) {
-				this.store.baked(image);
-			}
+		}
+		SavedTile savedTile;
+		while ((savedTile = this.fromSave.poll()) != null) {
+			savedTile.taken().complete(this.tileFromSave(savedTile.image()));
 		}
 		PaintedClaims painted;
 		while ((painted = this.paintedClaims.poll()) != null) {
@@ -619,6 +603,10 @@ public final class MapLevel implements ChunkSource {
 		if (this.trimStuck && System.currentTimeMillis() - this.lastTrimMs >= TRIM_RETRY_MS) {
 			this.trimChunks();
 		}
+		if (System.currentTimeMillis() - this.lastLiveCheckMs >= LIVE_CHECK_MS) {
+			this.lastLiveCheckMs = System.currentTimeMillis();
+			this.handOverLiveChunks();
+		}
 
 		BlockLooks looks = BlockLooks.get();
 		if (looks != null && this.topY != Integer.MIN_VALUE) {
@@ -626,6 +614,12 @@ public final class MapLevel implements ChunkSource {
 			int limit = 6;
 			List<Map.Entry<TileKey, Double>> order = new ArrayList<>(this.wanted.entrySet());
 			order.sort(Map.Entry.comparingByValue());
+			if (!order.isEmpty()) {
+				TileKey middle = order.get(0).getKey();
+				this.focusU = middle.minU() + middle.units() / 2.0;
+				this.focusV = middle.minV() + middle.units() / 2.0;
+				this.focusMs = now;
+			}
 			for (Map.Entry<TileKey, Double> entry : order) {
 				if (this.inFlight.size() >= limit) {
 					if (SLOT_STATS) {
@@ -658,6 +652,82 @@ public final class MapLevel implements ChunkSource {
 		}
 		this.wanted.clear();
 		this.evict();
+	}
+
+	/** Takes a finished bake: shows it if a map still wants it, and saves it. */
+	private void bakeFinished(TileImage image) {
+		this.inFlight.remove(image.key());
+		if (SLOT_STATS) {
+			this.slotReleased(image.key());
+		}
+		boolean background = this.backgroundBakes.remove(image.key());
+		if (this.closed) {
+			return;
+		}
+		if (image.generation() != this.generation(image.key())) {
+			// Baked under old colours or the other cave mode; bake it again.
+			MapTile stale = this.tiles.remove(image.key());
+			if (stale != null) {
+				stale.close();
+				this.coverageVersion++;
+			}
+			if (background) {
+				this.unsaved.put(image.key(), 0L);
+			}
+			return;
+		}
+		MapTile tile = this.tiles.get(image.key());
+		if (background && tile == null) {
+			// Baked only to be saved; a map that wants it will bake it again.
+			if (this.store != null) {
+				this.store.baked(image);
+				this.pixelsMoved(image.key());
+			}
+			return;
+		}
+		if (tile == null) {
+			if (image.key().lod() > 0 && !image.isFull()) {
+				if (!this.dirty.containsKey(image.key())) {
+					this.emptyOverviews.add(image.key());
+				}
+			}
+			if (!image.isFull()) {
+				// The tile was evicted while its patch baked.
+				return;
+			}
+			tile = new MapTile();
+			this.tiles.put(image.key(), tile);
+		}
+		tile.upload(image);
+		this.pixelsMoved(image.key());
+		this.coverageVersion++;
+		if (this.store != null && !image.key().isCave() && image.key().lod() == 0) {
+			this.store.baked(image);
+		}
+	}
+
+	/**
+	 * Takes a tile drawn from the save, unless the live world got in its way. A full bake replaces
+	 * what's saved, and each started from the tile as it was then: letting either bake over the
+	 * other would lose what the other drew, and the live one must win. So a tile with a live bake
+	 * running, or one that finished since this one started, goes back to be drawn again after it.
+	 * A live bake that's only due is no reason: it starts from this tile, and re-bakes what changed.
+	 * Render thread.
+	 */
+	private boolean tileFromSave(TileImage image) {
+		TileKey key = image.key();
+		TileStore store = this.store;
+		if (store == null || this.closed || image.generation() != this.generation(key) || this.savedTileRaced || this.inFlight.contains(key)) {
+			return false;
+		}
+		MapTile tile = this.tiles.get(key);
+		if (tile != null) {
+			tile.upload(image);
+			this.coverageVersion++;
+		}
+		this.pixelsMoved(key);
+		store.baked(image);
+		return true;
 	}
 
 	/**
@@ -1154,5 +1224,110 @@ public final class MapLevel implements ChunkSource {
 
 	public int bakingCount() {
 		return this.inFlight.size();
+	}
+
+	/** A sky view tile {@link SavedChunkImport} drew, and the answer to whether the map took it. */
+	private record SavedTile(TileImage image, CompletableFuture<Boolean> taken) {
+	}
+
+	/**
+	 * The folder {@link SavedChunkImport} keeps its progress in: the one the sky view's tiles are
+	 * saved in, or null when chunks from the save mustn't be drawn there. With nothing saved there's
+	 * nowhere to draw them, and under a roof with fog of war the sky view may only hold what the
+	 * player saw, which the save can't say.
+	 */
+	public @Nullable Path importFolder() {
+		if (this.closed || this.folder == null || this.store == null || this.roofless() && this.fogOfWar) {
+			return null;
+		}
+		return this.folder.resolve(this.storeName);
+	}
+
+	/** Where a view looked in the last moments, as map space {u, v}, or null if none did. */
+	double @Nullable [] importFocus() {
+		return System.currentTimeMillis() - this.focusMs > 1000 ? null : new double[] {this.focusU, this.focusV};
+	}
+
+	/**
+	 * Starts or stops noting which chunks load live, for {@link #takeLiveChunks}. Render thread. A
+	 * chunk's tiles can still be waiting to be saved when the player leaves; such a chunk is never
+	 * handed over, so the next visit draws it from the save instead of leaving a hole.
+	 */
+	void watchLiveChunks(boolean watch) {
+		this.watchingLiveChunks = watch;
+		this.liveChunks.clear();
+		if (watch) {
+			this.liveChunks.addAll(this.chunks.keySet());
+		}
+	}
+
+	/** Moves live chunks whose tiles are saved along to {@link #takeLiveChunks}. A trim only drops saved ones. */
+	private void handOverLiveChunks() {
+		Iterator<Long> it = this.liveChunks.iterator();
+		while (it.hasNext()) {
+			long key = it.next();
+			ChunkSnapshot snapshot = this.chunks.get(key);
+			if (snapshot == null || !this.waitingToSave(snapshot)) {
+				this.liveChunksSaved.add(key);
+				it.remove();
+			}
+		}
+	}
+
+	/** Hands over the chunks seen live with their tiles saved since the last call. */
+	void takeLiveChunks(java.util.function.LongConsumer consumer) {
+		Long key;
+		while ((key = this.liveChunksSaved.poll()) != null) {
+			consumer.accept(key);
+		}
+	}
+
+	/** Whether a sky view tile is saved with no gaps in its picture. */
+	boolean pictureWhole(TileKey key) {
+		TileStore store = this.store;
+		int[] pixels = store == null ? null : store.read(key);
+		if (pixels == null) {
+			return false;
+		}
+		for (int pixel : pixels) {
+			if ((pixel >>> 24) == 0) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * Bakes a sky view tile from {@code source} on the calling thread, merged with what's saved like
+	 * any bake, and waits for the render thread to take it. Returns whether it did; see
+	 * {@link #tileFromSave}. One at a time.
+	 */
+	boolean bakeFromSave(TileKey key, ChunkSource source, BlockLooks looks) {
+		TileStore store = this.store;
+		if (store == null) {
+			return false;
+		}
+		int generation = this.generation(key);
+		this.savedTileRaced = false;
+		this.savedTileBaking = key;
+		try {
+			int[] saved = store.read(key);
+			TileImage image = TileBaker.bake(key, source, looks, null, false, saved, null);
+			image = image.withSpots(TileSpots.pick(image, source, looks, false, store.spots(key))).withGeneration(generation);
+			CompletableFuture<Boolean> taken = new CompletableFuture<>();
+			this.fromSave.add(new SavedTile(image, taken));
+			while (!this.closed) {
+				try {
+					return taken.get(50, java.util.concurrent.TimeUnit.MILLISECONDS);
+				} catch (java.util.concurrent.TimeoutException e) {
+					// The render thread takes it on its next update.
+				} catch (InterruptedException | java.util.concurrent.ExecutionException e) {
+					return false;
+				}
+			}
+			return false;
+		} finally {
+			this.savedTileBaking = null;
+		}
 	}
 }
