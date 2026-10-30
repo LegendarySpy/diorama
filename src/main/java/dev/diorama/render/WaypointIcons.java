@@ -95,13 +95,7 @@ public final class WaypointIcons {
 		int y1 = -1;
 		for (int y = 0; y < height; y++) {
 			for (int x = 0; x < width; x++) {
-				//? if >=1.21.2 {
-				int argb = image.getPixel(x, y);
-				//?} else {
-				/*// Only the ABGR getter existed; swap red and blue.
-				int abgr = image.getPixelRGBA(x, y);
-				int argb = (abgr & 0xFF00FF00) | (abgr >> 16 & 0xFF) | (abgr & 0xFF) << 16;
-				*///?}
+				int argb = argb(image, x, y);
 				all[y * width + x] = argb;
 				if (argb >>> 24 >= 128) {
 					x0 = Math.min(x0, x);
@@ -121,6 +115,17 @@ public final class WaypointIcons {
 			System.arraycopy(all, (y0 + y) * width + x0, argb, y * w, w);
 		}
 		return PinArt.fromArgb(w, h, argb);
+	}
+
+	/** An image's pixel as ARGB. */
+	static int argb(NativeImage image, int x, int y) {
+		//? if >=1.21.2 {
+		return image.getPixel(x, y);
+		//?} else {
+		/*// Only the ABGR getter existed; swap red and blue.
+		int abgr = image.getPixelRGBA(x, y);
+		return (abgr & 0xFF00FF00) | (abgr >> 16 & 0xFF) | (abgr & 0xFF) << 16;
+		*///?}
 	}
 
 	/** The icon centred on a {@link #TILE}, shrunk by a whole factor first if it's bigger, so every pin is the same size. */

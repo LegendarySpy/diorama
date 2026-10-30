@@ -108,27 +108,34 @@ public final class Circle {
 	}
 
 	/**
-	 * The band between this circle's edge and a circle {@code width} smaller inside it, as the
-	 * corners of its quads. A new array each time.
+	 * The band between this circle's edge and a circle {@code width} smaller inside it, as quads
+	 * textured from a picture of a ring: the picture's edge on this circle, and a circle
+	 * {@code pictureWidth} (a share of the picture's width) inside that on the inner one.
 	 */
-	public float[] ring(float width) {
+	public Quads ring(float width, float pictureWidth) {
 		float inner = Math.max(0, this.r - width);
+		float innerUv = 0.5F - pictureWidth;
 		float[] corners = new float[SIDES * 8];
+		float[] uvs = new float[SIDES * 8];
 		int out = 0;
 		for (int i = 0; i < SIDES; i++) {
 			int j = (i + 1) % SIDES;
 			// Along the outside in the circle's turning order, then back along the inside: counter-clockwise
 			// on screen, like disc()'s quads, since the GUI culls the other winding.
-			corners[out++] = this.cx + this.r * UNIT[i * 2];
-			corners[out++] = this.cy + this.r * UNIT[i * 2 + 1];
-			corners[out++] = this.cx + this.r * UNIT[j * 2];
-			corners[out++] = this.cy + this.r * UNIT[j * 2 + 1];
-			corners[out++] = this.cx + inner * UNIT[j * 2];
-			corners[out++] = this.cy + inner * UNIT[j * 2 + 1];
-			corners[out++] = this.cx + inner * UNIT[i * 2];
-			corners[out++] = this.cy + inner * UNIT[i * 2 + 1];
+			out = this.corner(corners, uvs, out, i, this.r, 0.5F);
+			out = this.corner(corners, uvs, out, j, this.r, 0.5F);
+			out = this.corner(corners, uvs, out, j, inner, innerUv);
+			out = this.corner(corners, uvs, out, i, inner, innerUv);
 		}
-		return corners;
+		return new Quads(corners, uvs);
+	}
+
+	private int corner(float[] corners, float[] uvs, int out, int side, float radius, float uvRadius) {
+		corners[out] = this.cx + radius * UNIT[side * 2];
+		corners[out + 1] = this.cy + radius * UNIT[side * 2 + 1];
+		uvs[out] = 0.5F + uvRadius * UNIT[side * 2];
+		uvs[out + 1] = 0.5F + uvRadius * UNIT[side * 2 + 1];
+		return out + 2;
 	}
 
 	/**
