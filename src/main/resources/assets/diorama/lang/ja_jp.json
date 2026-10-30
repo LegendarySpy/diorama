@@ -34,7 +34,7 @@
 	"diorama.waypoints.title": "ウェイポイント",
 	"diorama.waypoints.empty_title": "このディメンションにはまだウェイポイントが存在しない",
 	"diorama.waypoints.empty": "%sを押して現在地にウェイポイントを追加するか、",
-	"diorama.waypoints.empty_unbound": "「新しいウェイポイント」を使って現在地にウェイポイントを追加するか、",
+	"diorama.waypoints.empty_unbound": "「ウェイポイントを作成」を使って現在地にウェイポイントを追加するか、",
 	"diorama.waypoints.empty_map": "マップ上で右クリックして「ここにウェイポイントを追加」を選択してください。",
 	"diorama.waypoints.search": "ウェイポイントを検索",
 	"diorama.waypoints.no_match": "一致するウェイポイントはありません",
