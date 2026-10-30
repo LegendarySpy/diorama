@@ -311,7 +311,7 @@
     "diorama.draw.measure.looking": "測定中",
     "diorama.draw.colour": "色",
     "diorama.draw.undo": "元に戻す（Ctrl+Z）",
-    "diorama.draw.help.pen": "ドラッグで描く | 右クリックで移動 | Escキーで描画を中止",
+    "diorama.draw.help.pen": "ドラッグで描く | 右ドラッグで移動 | Escキーで描画を中止",
     "diorama.draw.help.line": "クリックで点を追加 | ダブルクリックで終了 | Shiftキーで直線に固定 | Escキーで中止",
     "diorama.draw.help.area": "クリックで角 | ダブルクリックで終了 | Escキーで描画を中止",
     "diorama.draw.help.note": "メモを配置したい場所をクリックし、入力 | Enterキーで確定 | Escキーで中止",
