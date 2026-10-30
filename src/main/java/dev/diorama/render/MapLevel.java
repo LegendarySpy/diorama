@@ -524,8 +524,9 @@ public final class MapLevel implements ChunkSource {
 		int z0 = snapshot.chunkZ << 4;
 		int tu0 = (int) Math.floor(x0 / units);
 		int tu1 = (int) Math.floor((x0 + 16) / units);
-		int tv0 = (int) Math.floor(Projection.v(snapshot.maxY + 1, z0) / units);
-		int tv1 = (int) Math.floor(Projection.v(snapshot.floorY, z0 + 16) / units);
+		// Under a roof the chunk's height is the roof's: what shows can be anywhere down to the floor.
+		int tv0 = (int) Math.floor(Projection.v(this.roofless() ? Math.min(snapshot.maxY + 1, this.roof) : snapshot.maxY + 1, z0) / units);
+		int tv1 = (int) Math.floor(Projection.v(this.roofless() ? this.minY : snapshot.floorY, z0 + 16) / units);
 		for (int tu = tu0; tu <= tu1; tu++) {
 			for (int tv = tv0; tv <= tv1; tv++) {
 				TileKey key = new TileKey(TileKey.SURFACE, tu, tv);
