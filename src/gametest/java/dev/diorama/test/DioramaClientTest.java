@@ -5600,11 +5600,13 @@ public class DioramaClientTest implements FabricClientGameTest {
 	/** Waits until no tile has been baking for a while. */
 	private static void settle(ClientGameTestContext context, int minTicks) {
 		context.waitTicks(minTicks);
-		int quiet = 0;
-		for (int i = 0; i < 1200 && quiet < 30; i++) {
-			context.waitTick();
-			boolean baking = context.computeOnClient(mc -> MapSession.get() != null && MapSession.get().map().bakingCount() > 0);
-			quiet = baking ? 0 : quiet + 1;
+		try (WorldPause paused = WorldPause.pause(context)) {
+			int quiet = 0;
+			for (int i = 0; i < 1200 && quiet < 30; i++) {
+				context.waitTick();
+				boolean baking = context.computeOnClient(mc -> MapSession.get() != null && MapSession.get().map().bakingCount() > 0);
+				quiet = baking ? 0 : quiet + 1;
+			}
 		}
 	}
 }
