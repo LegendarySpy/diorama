@@ -49,8 +49,9 @@ final class WorldPause implements AutoCloseable {
 				server.execute(() -> server.tickRateManager().setFrozen(false));
 			}
 		});
+		// Until the client hears the world runs again, so what the test does next finds it running.
+		// The shim's ticks don't wait for the server, so one tick isn't enough there.
+		this.context.waitFor(mc -> mc.level == null || !mc.level.tickRateManager().isFrozen(), 200);
 		//?}
-		// One tick for the server to run it, so what the test does next finds the world running.
-		this.context.waitTick();
 	}
 }
