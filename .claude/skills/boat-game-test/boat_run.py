@@ -119,15 +119,14 @@ def tail(result):
     return (result.stdout + result.stderr).strip()[-2000:]
 
 
-def our_vms(prefix=None, names=()):
-    """[(name, id, state)] of this run's VMs on the account (named with `prefix` instead if given,
-    plus any named exactly as in `names`), stopped ones included; None when boat list fails, which
-    is not the same as having none."""
+def our_vms(prefix=None):
+    """[(name, id, state)] of this run's VMs on the account (or those named with `prefix`), stopped
+    ones included; None when boat list fails, which is not the same as having none."""
     listed = next(events(boat('list', '--all', '--json').stdout), None)
     if not listed or 'sandboxes' not in listed:
         return None
     return [(v['name'], v['id'], v.get('state')) for v in listed['sandboxes']
-            if v.get('name', '').startswith(prefix or PREFIX) or v.get('name') in names]
+            if v.get('name', '').startswith(prefix or PREFIX)]
 
 
 def find_vm(name):
@@ -138,13 +137,13 @@ def find_vm(name):
 # A warm VM is one a run left running for the next run from the same checkout, named
 # diorama-warm-<checkout>-<snapshot commit>-<node>. It has the node's build, Gradle's configuration
 # cache and the snapshot's files already read, so a rerun starts about a minute sooner and costs
-# no start. boat.dev archives it (stops it, keeping the disk) when the lifetime set after its last
-# run ends; a stopped warm VM is never used again, and the next run deletes it.
+# no start. Only an idle VM has a warm name: a run takes one by renaming it to its own
+# PREFIX + node, so while it's in use everything else (cleanup, keeping a VM with its evidence)
+# works as for any VM of the run, and gives it back by renaming it after a run that went well.
+# boat.dev archives it (stops it, keeping the disk) when the lifetime set then runs out; a stopped
+# warm VM is never used again, and the next run deletes it.
 WARM_PREFIX = 'diorama-warm-'
 CHECKOUT = ''
-# Warm-named VMs this run uses, until each is handed on warm or deleted: reconcile() cleans up
-# these by exact name, like the run's own prefix.
-warm_in_use = {}
 
 
 def warm_name(node, snapshot):
@@ -175,8 +174,9 @@ def warm_lock(repo, node):
 
 
 def take_warm(node, snapshot, size):
-    """This checkout's warm VM for the node, if one is running and was made from `snapshot` at this
-    size; deletes this checkout's others for the node (stopped, from an older snapshot)."""
+    """This checkout's warm VM for the node, renamed to this run's PREFIX + node, if one is running
+    idle and was made from `snapshot` at this size; deletes this checkout's others for the node
+    (stopped, from an older snapshot)."""
     found = our_vms(f'{WARM_PREFIX}{CHECKOUT}-') or []
     want = warm_name(node, snapshot)
     reuse = None
@@ -189,18 +189,25 @@ def take_warm(node, snapshot, size):
             # Not while a run is on it: a script killed outright leaves its tests running there.
             idle = next(events(boat('exec', vm, '--timeout', '30', '--json', '--', 'flock', '-n',
                                     '/home/user/sandbox.lock', 'true').stdout), {}).get('exitCode') == 0
-            # Long enough for this run; set back to the warm time after it.
-            if idle and sandbox.get('type') == size and boat('extend', vm, '--ttl', str(TTL), '--json').returncode == 0:
-                reuse = vm
+            if idle and sandbox.get('type') == size:
+                # Ours from here: cleanup finds it by this run's prefix. A rename that fails leaves
+                # it warm for later; this run makes a VM of its own.
+                if boat('rename', vm, PREFIX + node, '--json').returncode == 0:
+                    # Long enough for this run; set back to the warm time after it.
+                    boat_retry('extend', vm, '--ttl', str(TTL), '--json')
+                    reuse = vm
                 continue
         if state not in GONE:
             boat('delete', vm, '--yes', '--json')
     return reuse
 
 
-def keep_warm(node, vm, minutes):
-    """Leaves the VM running for the next run, until boat.dev archives it `minutes` from now."""
+def keep_warm(node, vm, snapshot, minutes):
+    """Gives the VM back to this checkout's warm pool, until boat.dev archives it `minutes` from
+    now; False if that failed and it's still this run's to delete."""
     if boat('extend', vm, '--ttl', str(minutes * 60), '--json').returncode:
+        return False
+    if boat('rename', vm, warm_name(node, snapshot), '--json').returncode:
         return False
     say(node, f'VM {vm} stays warm {minutes} min for the next run from this checkout (--warm-minutes 0 to delete it now)')
     return True
@@ -237,7 +244,7 @@ def ignore_signals():
 
 def reconcile(rounds=1):
     """The final cleanup, on normal exit, on an error and after Ctrl-C: deletes every VM with this
-    run's prefix or a warm name it still holds, stopping instead the ones kept on purpose, and says
+    run's prefix (warm VMs it took included), stopping instead the ones kept on purpose, and says
     what's left. Signals are ignored meanwhile, so a second Ctrl-C can't cut it short."""
     ignore_signals()
     left = None
@@ -245,7 +252,7 @@ def reconcile(rounds=1):
         if i:
             # A `boat new` that was under way can still make its VM.
             time.sleep(20)
-        found = our_vms(names=set(warm_in_use))
+        found = our_vms()
         if found is None:
             left = None
             continue
@@ -341,10 +348,10 @@ def wait_for_start_slot():
         time.sleep(10)
 
 
-def create_vm(size, snapshot, what, ttl=TTL, name=None):
-    """A new VM named PREFIX + what, or `name`. One start per call and no retry: a failed start that
-    did make a VM is found by name, and one that didn't fails the node."""
-    name = name or PREFIX + what
+def create_vm(size, snapshot, what, ttl=TTL):
+    """A new VM named PREFIX + what. One start per call and no retry: a failed start that did make
+    a VM is found by name, and one that didn't fails the node."""
+    name = PREFIX + what
     wait_for_start_slot()
     if stop_starting.is_set():
         raise Refused('not starting: an earlier start was refused, or the script is stopping')
@@ -387,6 +394,7 @@ def run_script(vm, script, *args, deadline, launched=None):
     if next(events(cleared.stdout), {}).get('exitCode') != 0:
         raise RuntimeError(f'could not clear the last run\'s exit code: {tail(cleared)}')
     for attempt in range(3):
+        sent = time.time()
         started = boat('exec', vm, '--detach', '--json', '--', 'bash', script, *args)
         if any('pid' in e for e in events(started.stdout)):
             break
@@ -399,7 +407,7 @@ def run_script(vm, script, *args, deadline, launched=None):
         if attempt == 2:
             raise RuntimeError(f'could not start {script}: {tail(started)}')
     if launched is not None:
-        launched.append(time.time())
+        launched.append(sent)
     misses = 0
     while time.time() < deadline:
         time.sleep(30)
@@ -457,21 +465,18 @@ def run_node(node, args, repo, snapshot, start):
     name = PREFIX + node
     if args.keep:
         keep_names.add(name)
-    # With --warm-minutes 0 a warm VM is still reused, then deleted at the end.
+    # With --warm-minutes 0 a warm VM is still reused, then deleted at the end. The lock keeps two
+    # runs from this checkout from taking the same one at once.
+    vm = None
     lock = warm_lock(repo, node) if not args.keep else None
-    vm = take_warm(node, snapshot, args.type) if lock else None
-    reused = vm is not None
-    if lock and not (reused or args.warm_minutes):
-        # Nothing to reuse and nothing to keep: an ordinary VM of this run.
-        lock.close()
-        lock = None
     if lock:
-        name = warm_name(node, snapshot)
-        warm_in_use[name] = vm
+        try:
+            vm = take_warm(node, snapshot, args.type)
+        finally:
+            lock.close()
+    reused = vm is not None
     if not vm:
-        vm = create_vm(args.type, snapshot, node, name=name)
-        if lock:
-            warm_in_use[name] = vm
+        vm = create_vm(args.type, snapshot, node)
     say(node, f'VM {vm} ({args.type}) {"reused, warm" if reused else "ready"} after {time.time() - start:.0f} s')
     ready = time.time() - start
     ran = False
@@ -507,29 +512,15 @@ def run_node(node, args, repo, snapshot, start):
     except Exception:
         # Once the tests ran, the VM holds their evidence: keep it, stopped, rather than lose it.
         if ran and not interrupted.is_set():
-            # Out of the warm name, so the next run doesn't delete it with the evidence.
-            if name.startswith(WARM_PREFIX):
-                if boat_retry('rename', vm, PREFIX + node, '--json').returncode == 0:
-                    warm_in_use.pop(name, None)
-                    name = PREFIX + node
-                else:
-                    say(node, f'!! could not rename VM {vm} out of its warm name: the next run deletes it once '
-                              'it is stopped, so fetch its results first')
             keep_names.add(name)
             say(node, f'!! keeping VM {vm} with what the run left in ~/result.tgz and ~/sandbox.log: '
                       f'boat resume {vm}, boat scp {vm}:/home/user/result.tgz ., then boat delete {vm} --yes')
         raise
     finally:
         # A failure here is caught by reconcile() at the end.
-        if done and lock and args.warm_minutes and not interrupted.is_set() and keep_warm(node, vm, args.warm_minutes):
-            warm_in_use.pop(name, None)
-        else:
-            settled = boat('stop' if name in keep_names else 'delete', vm, '--json', *([] if name in keep_names else ['--yes']))
-            # Otherwise reconcile() tries again and reports it.
-            if settled.returncode == 0 and name not in keep_names:
-                warm_in_use.pop(name, None)
-        if lock:
-            lock.close()
+        warm = done and args.warm_minutes and not args.keep and not interrupted.is_set()
+        if not (warm and keep_warm(node, vm, snapshot, args.warm_minutes)):
+            boat('stop' if name in keep_names else 'delete', vm, '--json', *([] if name in keep_names else ['--yes']))
 
     result = json.loads((out / 'result.json').read_text())
     shots = sorted((out / 'screenshots').glob('*.png')) if (out / 'screenshots').exists() else []
@@ -664,7 +655,6 @@ def main():
         for t in threads:
             if t.is_alive():
                 t.join(max(0, until - time.time()))
-        # Warm VMs in use when the run stopped are in an unknown state: reconcile() deletes them.
         reconcile(rounds=2)
         sys.exit(130)
     reconcile()
