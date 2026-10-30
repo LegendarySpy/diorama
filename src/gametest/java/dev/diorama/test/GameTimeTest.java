@@ -6,6 +6,10 @@ import dev.diorama.Settings;
 import dev.diorama.Settings.GameTime;
 import dev.diorama.SettingsScreen;
 import net.fabricmc.fabric.api.client.gametest.v1.context.ClientGameTestContext;
+//? if >=1.21.4 && fabric {
+import net.fabricmc.fabric.api.client.gametest.v1.context.TestDedicatedServerConnection;
+import net.fabricmc.fabric.api.client.gametest.v1.context.TestDedicatedServerContext;
+//?}
 import net.fabricmc.fabric.api.client.gametest.v1.context.TestSingleplayerContext;
 import net.minecraft.world.level.Level;
 
@@ -106,6 +110,35 @@ final class GameTimeTest {
 		world.getServer().runCommand("time set noon");
 		context.runOnClient(mc -> Settings.get().gameTime = GameTime.OFF);
 	}
+
+	/** The same clock on a dedicated server, where /skipnight lives: sent over the network, stopped and started by the server. */
+	//? if >=1.21.4 && fabric {
+	static void onServer(ClientGameTestContext context) {
+		try (TestDedicatedServerContext server = context.worldBuilder()
+			.setUseConsistentSettings(false)
+			.adjustSettings(s -> s.setSeed("diorama-game-time"))
+			.createServer(DioramaClientTest.serverProperties())) {
+			try (TestDedicatedServerConnection connection = server.connect()) {
+				context.waitFor(mc -> MapSession.get() != null && MapSession.get().map().chunkCount() > 50, 2400);
+				context.runOnClient(mc -> Settings.get().gameTime = GameTime.DAY_24H);
+				server.runCommand("gamerule advance_time false");
+				server.runCommand("time set 14000");
+				context.waitFor(mc -> mc.level.getOverworldClockTime() == 14000 && mc.level.isDarkOutside(), 200);
+				context.waitTicks(40);
+				if (clock(context) != 14000) {
+					throw new AssertionError("On a server with the daylight cycle off the clock moved to " + clock(context));
+				}
+				context.takeScreenshot("game-time-07-server-frozen-night");
+				server.runCommand("time set 6000");
+				context.waitFor(mc -> mc.level.getOverworldClockTime() == 6000 && !mc.level.isDarkOutside(), 200);
+				context.takeScreenshot("game-time-07-server-frozen-noon");
+				server.runCommand("gamerule advance_time true");
+				context.waitFor(mc -> mc.level.getOverworldClockTime() > 6040, 200);
+			}
+		}
+		context.runOnClient(mc -> Settings.get().gameTime = GameTime.OFF);
+	}
+	//?}
 
 	private static void formats() {
 		String[][] expected = {
