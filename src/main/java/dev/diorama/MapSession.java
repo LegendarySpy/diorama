@@ -46,7 +46,12 @@ public final class MapSession {
 
 	private final ClientLevel level;
 	private final MapLevel map;
-	/** Fills the map in from the world's save, in singleplayer; null elsewhere and when turned off. */
+	/**
+	 * Whether this is the dimension's main map. A map the player made starts blank and stays theirs
+	 * to fill, so only the main one fills in from the save.
+	 */
+	private final boolean mainMap;
+	/** Fills the main map in from the world's save, in singleplayer; null elsewhere and when turned off. */
 	private @Nullable SavedChunkImport savedChunks;
 	private final Map<Long, Pending> pending = new LinkedHashMap<>();
 	private boolean underground;
@@ -57,6 +62,7 @@ public final class MapSession {
 		// The Nether's roof: its sky view looks down from just under it.
 		int roof = level.dimensionType().hasCeiling() ? level.getMinY() + level.dimensionType().logicalHeight() : MapLevel.NO_ROOF;
 		this.map = new MapLevel(level.getMinY(), level.getMaxY() + 1, roof, mapFolder(level, key));
+		this.mainMap = key != null && Maps.of(key).active(level.dimension().identifier().toString()).isEmpty();
 	}
 
 	/** Stops filling in from the save, then saves and closes the map. */
@@ -384,7 +390,7 @@ public final class MapSession {
 
 	/** Starts or stops filling in from the save with the setting. */
 	private void updateSavedChunks(Minecraft mc) {
-		boolean on = Settings.get().mapSavedChunks && mc.getSingleplayerServer() != null;
+		boolean on = Settings.get().mapSavedChunks && this.mainMap && mc.getSingleplayerServer() != null;
 		if (on && this.savedChunks == null) {
 			this.savedChunks = SavedChunkImport.start(this.map, this.level);
 		} else if (!on && this.savedChunks != null) {
