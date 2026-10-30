@@ -17,6 +17,7 @@ import os
 import secrets
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tarfile
@@ -646,7 +647,9 @@ def main():
     if args.warm_minutes is None:
         args.warm_minutes = WARM_MINUTES if len(nodes) <= 3 else 0
     global CHECKOUT
-    CHECKOUT = hashlib.sha1(str(repo).lower().encode()).hexdigest()[:6]
+    # Per machine and worktree: other machines share the boat.dev account, and paths only fold case
+    # where the file system does.
+    CHECKOUT = hashlib.sha1(f"{socket.gethostname()}:{os.path.normcase(str(repo))}".encode()).hexdigest()[:6]
 
     snapshot = args.snapshot or newest_snapshot()
     if snapshot:
