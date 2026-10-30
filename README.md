@@ -10,7 +10,7 @@ A minimap and world map for Minecraft that draws your world at an angle, like a 
 
 ## What you get
 
-- **A minimap** in the corner of your choice, square or round, with a compass, your coordinates and the biome.
+- **A minimap** in the corner of your choice, square or round, with a compass, your coordinates, the biome and, if you turn it on, the game time.
 - **A fullscreen map** you can drag and zoom, from single blocks out to about 10,000 blocks across.
 - **A map that remembers.** Everywhere you've been is saved, per world and dimension, so it's still there next time. Places you haven't seen yet sit under drifting fog.
 - **Caves and the Nether.** Underground, the map shows the cave you're in. In the Nether it looks in under the bedrock roof.

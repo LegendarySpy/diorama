@@ -67,6 +67,7 @@ public final class Settings {
 	public boolean compass = true;
 	public boolean coordinates = true;
 	public boolean biome = true;
+	public GameTime gameTime = GameTime.OFF;
 	public boolean autoCaves = true;
 	public Frame minimapFrame = Frame.CLASSIC;
 	public Shape minimapShape = Shape.SQUARE;
@@ -153,6 +154,15 @@ public final class Settings {
 	public enum Quality {
 		FANCY,
 		FAST
+	}
+
+	/** The game time under the minimap, in the formats Xaero's Minimap offers. */
+	public enum GameTime {
+		OFF,
+		DAY_24H,
+		DAY_12H,
+		ONLY_24H,
+		ONLY_12H
 	}
 
 	/** The minimap's border: the dark frame, a clean Minecraft edge, or none. */
@@ -293,6 +303,9 @@ public final class Settings {
 		}
 		if (settings.minimapCorner == null) {
 			settings.minimapCorner = Corner.TOP_RIGHT;
+		}
+		if (settings.gameTime == null) {
+			settings.gameTime = GameTime.OFF;
 		}
 		if (settings.quality == null) {
 			settings.quality = Quality.FANCY;

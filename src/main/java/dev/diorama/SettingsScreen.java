@@ -82,6 +82,9 @@ public final class SettingsScreen extends Screen {
 		Settings.Corner[] corners = Settings.Corner.values();
 		minimap.cycle("corner", () -> s.minimapCorner.ordinal(), corners.length, i -> s.minimapCorner = corners[i],
 			i -> Component.translatable("diorama.settings.corner." + corners[i].name().toLowerCase(Locale.ROOT)));
+		minimap.choice("game_time", Settings.GameTime.values(), () -> s.gameTime, v -> s.gameTime = v);
+		// Beside Corner, so the tab doesn't grow.
+		minimap.lastTwoSideBySide();
 		int sizes = (Settings.MAX_SIZE - Settings.MIN_SIZE) / Settings.SIZE_STEP + 1;
 		minimap.slider("size", (s.minimapSize - Settings.MIN_SIZE) / Settings.SIZE_STEP, sizes,
 			i -> s.minimapSize = Settings.MIN_SIZE + i * Settings.SIZE_STEP, i -> Component.literal(Integer.toString(Settings.MIN_SIZE + i * Settings.SIZE_STEP)));
