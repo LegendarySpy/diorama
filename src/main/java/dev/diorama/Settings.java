@@ -79,6 +79,8 @@ public final class Settings {
 	public boolean radarHostile = true;
 	public boolean radarNeutral = true;
 	public boolean radarPassive = true;
+	/** Items lying on the ground, as small dots. */
+	public boolean radarItems = true;
 	public int radarRange = 32;
 	/** How players and mobs are drawn: their pixel-art heads, faces in framed boxes, or plain dots. */
 	public RadarStyle radarStyle = RadarStyle.HEADS;

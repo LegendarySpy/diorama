@@ -2683,6 +2683,23 @@ public class DioramaClientTest implements FabricClientGameTest {
 		context.getInput().setCursorPos(husk[0], husk[1]);
 		context.waitTicks(10);
 		context.takeScreenshot("radar-02-map");
+		// A dropped item is a small dot on the map, unless the setting's off.
+		world.getServer().runCommand("summon item " + (x + 3) + " " + y + " " + (z - 2) + " {Item:{id:\"minecraft:diamond\",count:1,Count:1b},Age:-32768s,PickupDelay:32767s}");
+		context.waitTicks(10);
+		context.takeScreenshot("radar-02b-dropped-item");
+		context.runOnClient(mc -> {
+			if (!showsItem((MapScreen) mc.gui.screen())) {
+				throw new AssertionError("The dropped item is not on the radar");
+			}
+			Settings.get().radarItems = false;
+		});
+		context.waitTicks(2);
+		context.runOnClient(mc -> {
+			if (showsItem((MapScreen) mc.gui.screen())) {
+				throw new AssertionError("The dropped item is on the radar with Dropped items off");
+			}
+			Settings.get().radarItems = true;
+		});
 		context.setScreen(() -> null);
 
 		// A lineup of mobs, hostile in one row and the rest in another, babies at the ends: each
@@ -2745,6 +2762,14 @@ public class DioramaClientTest implements FabricClientGameTest {
 		world.getServer().runCommand("tellraw @a \"§f§a§i§r§x§a§e§r§o\"");
 		context.waitTicks(20);
 		context.takeScreenshot("radar-03-fair-play-hides-radar");
+		context.setScreen(MapScreen::new);
+		context.waitTicks(2);
+		context.runOnClient(mc -> {
+			if (showsItem((MapScreen) mc.gui.screen())) {
+				throw new AssertionError("The dropped item is on the map under fair play");
+			}
+		});
+		context.setScreen(() -> null);
 
 		world.getServer().runCommand("tellraw @a \"§n§o§m§i§n§i§m§a§p\"");
 		context.waitTicks(20);
@@ -2769,6 +2794,10 @@ public class DioramaClientTest implements FabricClientGameTest {
 		world.getServer().runCommand("time set noon");
 		world.getServer().runCommand("kill @e[type=!player]");
 		context.waitTicks(10);
+	}
+
+	private static boolean showsItem(MapScreen screen) {
+		return screen.blips().stream().anyMatch(blip -> blip.kind() == Radar.Kind.ITEM);
 	}
 
 	/**
