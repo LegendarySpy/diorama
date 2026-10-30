@@ -239,7 +239,7 @@
 	"diorama.settings.waypoint_distance.any": "どれでも",
 	"diorama.settings.waypoint_distance.tooltip": "これより遠くにあるウェイポイントはワールドやミニマップ上から非表示になりますが、フルスクリーンマップ上には表示され続けます。死亡地点・一時ウェイポイント・自分のベッドは常に表示されます。",
 	"diorama.settings.teleport_command": "テレポートコマンド",
-	"diorama.settings.teleport_command.tooltip": "Dioramaには、/tp コマンドの代わりに独自のテレポート用コマンドが用意されています。{x}、{y}、{z}の部分が、テレポート先の座標となります。",
+	"diorama.settings.teleport_command.tooltip": "Dioramaがテレポート時に送信するコマンドです。サーバーが /tp の代わりに独自のコマンドを使う場合に設定します。{x}、{y}、{z}はテレポート先の座標に置き換わります。",
 	"diorama.teleport_command.label": "コマンド",
 	"diorama.teleport_command.hint": "{x} {y} {z} がその地点となります。空欄の場合は /tp を使用します。",
 	"diorama.teleport_command.reset": "リセット",
