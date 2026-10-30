@@ -17,23 +17,27 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.NeutralMob;
+import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.monster.Enemy;
 import net.minecraft.world.phys.Vec3;
 import org.jspecify.annotations.Nullable;
 
 /**
- * Other players and mobs on the map. Players show as their skin's face, including players
+ * Other players, mobs and dropped items on the map. Players show as their skin's face, including players
  * beyond the loaded chunks whose position the server reports (see {@link TrackedPlayers}). Mobs
  * show as their own face (see {@link MobFaces}) framed in a colour by how they treat you, or as a
  * dot of that colour when they have no face icon. Xaero's Minimap's icon files can give a mob an
- * image, an item or a dot instead (see {@link XaeroRadarIcons}). Anything well above or below you gets a caret
- * and fades a little, since the map is a top view and can't otherwise show height.
+ * image, an item or a dot instead (see {@link XaeroRadarIcons}). Dropped items are small dots under
+ * everything else. Anything well above or below you fades a little, and all but dropped items get a
+ * caret, since the map is a top view and can't otherwise show height.
  */
 public final class Radar {
 	/** Vertical distance, in blocks, past which a caret shows. */
 	private static final double CARET_HEIGHT = 3;
 
+	/** In drawing order, which is also the order they lose to each other under the cursor. */
 	public enum Kind {
+		ITEM(0xFF55FFFF),
 		PASSIVE(0xFF62D96B),
 		NEUTRAL(0xFFF2C14E),
 		HOSTILE(0xFFEF4B4B),
@@ -56,6 +60,9 @@ public final class Radar {
 	public static @Nullable Kind kind(Entity entity) {
 		if (entity instanceof AbstractClientPlayer) {
 			return Kind.PLAYER;
+		}
+		if (entity instanceof ItemEntity) {
+			return Kind.ITEM;
 		}
 		// Neutral first: endermen and zombified piglins are both, and they only attack when provoked.
 		if (entity instanceof NeutralMob) {
@@ -114,11 +121,15 @@ public final class Radar {
 			case HOSTILE -> settings.radarHostile;
 			case NEUTRAL -> settings.radarNeutral;
 			case PASSIVE -> settings.radarPassive;
+			case ITEM -> settings.radarItems;
 		};
 	}
 
 	private static float size(Kind kind, double zoom, boolean fullscreen) {
 		float scale = Settings.get().radarIconScale / 100.0F;
+		if (kind == Kind.ITEM) {
+			return scale * (fullscreen ? (float) Math.max(2, Math.min(4, zoom)) : 2);
+		}
 		if (kind == Kind.PLAYER) {
 			return scale * (fullscreen ? (float) Math.max(8, Math.min(16, zoom * 3)) : 7);
 		}
@@ -139,8 +150,11 @@ public final class Radar {
 		// pixel heads use whole screen pixels per texel and can come out bigger than their size.
 		Circle circle = view.round() ? Circle.in(view) : null;
 		IconBatch measure = circle == null ? null : IconBatch.measuring(graphics);
+		if (!players) {
+			itemDots(icons, blips, circle);
+		}
 		for (Blip blip : blips) {
-			if ((blip.kind() == Kind.PLAYER) != players) {
+			if (blip.kind() == Kind.ITEM || (blip.kind() == Kind.PLAYER) != players) {
 				continue;
 			}
 			int alpha = alphaFor(blip.dy());
@@ -159,6 +173,36 @@ public final class Radar {
 		}
 		icons.draw();
 		graphics.disableScissor();
+	}
+
+	/**
+	 * All the dropped items as one icon, whatever the radar style: outlines first, then the dots over
+	 * them. They look alike, so they need no order among themselves, and a farm's pile of hundreds
+	 * draws as one shape in one draw rather than a layer per dot.
+	 */
+	private static void itemDots(IconBatch icons, List<Blip> blips, @Nullable Circle circle) {
+		for (int pass = 0; pass < 2; pass++) {
+			for (Blip blip : blips) {
+				// They sort first.
+				if (blip.kind() != Kind.ITEM) {
+					break;
+				}
+				int alpha = alphaFor(blip.dy());
+				int d = Math.max(1, Math.round(blip.size()));
+				float x0 = blip.x() - d / 2.0F;
+				float y0 = blip.y() - d / 2.0F;
+				if (circle != null && !(circle.contains(x0 - 1, y0 - 1) && circle.contains(x0 + d + 1, y0 - 1)
+					&& circle.contains(x0 - 1, y0 + d + 1) && circle.contains(x0 + d + 1, y0 + d + 1))) {
+					continue;
+				}
+				if (pass == 0) {
+					icons.fill(x0 - 1, y0 - 1, x0 + d + 1, y0 + d + 1, withAlpha(0xFF000000, alpha));
+				} else {
+					icons.fill(x0, y0, x0 + d, y0 + d, withAlpha(blip.kind().color, alpha));
+				}
+			}
+		}
+		icons.endIcon();
 	}
 
 	/** One blip's icon in the radar style, with a caret if it's well above or below. */
@@ -333,7 +377,7 @@ public final class Radar {
 			double dy = blip.y() - mouseY;
 			double d = Math.sqrt(dx * dx + dy * dy);
 			// The square head as drawn (a mob's is 1.6 times its size), with its outline and a little slack.
-			double reach = (blip.kind() == Kind.PLAYER ? blip.size() / 2 : blip.size() * 0.8) + 3;
+			double reach = (blip.kind() == Kind.PLAYER || blip.kind() == Kind.ITEM ? blip.size() / 2 : blip.size() * 0.8) + 3;
 			if (Math.max(Math.abs(dx), Math.abs(dy)) > reach) {
 				continue;
 			}

@@ -109,6 +109,7 @@ public final class SettingsScreen extends Screen {
 		radar.toggle("hostile", () -> s.radarHostile, v -> s.radarHostile = v);
 		radar.toggle("neutral", () -> s.radarNeutral, v -> s.radarNeutral = v);
 		radar.toggle("passive", () -> s.radarPassive, v -> s.radarPassive = v);
+		radar.toggle("items", () -> s.radarItems, v -> s.radarItems = v);
 		radar.toggle("type_outline", () -> s.radarTypeOutline, v -> s.radarTypeOutline = v);
 		radar.choice("radar_style", Settings.RadarStyle.values(), () -> s.radarStyle, v -> s.radarStyle = v);
 		int scales = (Settings.MAX_SCALE - Settings.MIN_SCALE) / Settings.SCALE_STEP + 1;
