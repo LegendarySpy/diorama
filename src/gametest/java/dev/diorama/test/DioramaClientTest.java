@@ -102,6 +102,8 @@ public class DioramaClientTest implements FabricClientGameTest {
 
 			context.waitFor(mc -> MapSession.get() != null && MapSession.get().map().chunkCount() > 400, 2400);
 			settle(context, 100);
+			// boat_run.py times the warm-up by this line.
+			Diorama.LOGGER.info("Map warm-up done");
 			context.runOnClient(mc -> VoxelReaderChecks.check(MapSession.get().map(),
 				mc.player.blockPosition().getX() >> 4, mc.player.blockPosition().getZ() >> 4));
 			save = world.getWorldSave();

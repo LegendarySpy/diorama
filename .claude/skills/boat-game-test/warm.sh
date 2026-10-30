@@ -40,9 +40,11 @@ mkdir -p ~/prefetch-lists
 failed=""
 for n in $nodes; do
 	s=$(date +%s)
-	# --seccomp-bpf stops only on the traced calls, so the game runs at close to full speed.
+	# --seccomp-bpf stops only on the traced calls, so the game runs at close to full speed. The
+	# Gradle flags are sandbox.sh's, so the configuration cache entry stored here is the one its runs use.
 	timeout --kill-after=60 900 strace -f -qq --seccomp-bpf -e trace=openat -o /tmp/trace xvfb-run -a -s '-screen 0 1920x1080x24' \
-		bash ./gradlew --no-daemon --console=plain ":$n:runClientGameTest" > ~/boot-$n.log 2>&1
+		bash ./gradlew --no-daemon --console=plain --configuration-cache --configuration-cache-problems=warn \
+		":$n:runClientGameTest" > ~/boot-$n.log 2>&1
 	code=$?
 	grep -oE '"/[^"]+"' /tmp/trace | tr -d '"' | grep -vE '^/(proc|sys|dev|tmp|run)/|/build/run/' | sort -u \
 		| while read -r f; do [ -f "$f" ] && echo "$f"; done > ~/prefetch-lists/$n.list
