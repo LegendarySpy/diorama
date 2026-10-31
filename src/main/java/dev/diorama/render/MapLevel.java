@@ -294,6 +294,11 @@ public final class MapLevel implements ChunkSource {
 		this.store = this.openStore();
 		this.unsaved.clear();
 		this.emptyOverviews.clear();
+		// Chunks count as seen live per kind of view: what's saved for the old one isn't for this one.
+		this.liveChunksSaved.clear();
+		if (this.watchingLiveChunks) {
+			this.liveChunks.addAll(this.chunks.keySet());
+		}
 		for (ChunkSnapshot snapshot : this.chunks.values()) {
 			int x0 = snapshot.chunkX << 4;
 			int z0 = snapshot.chunkZ << 4;
@@ -725,6 +730,11 @@ public final class MapLevel implements ChunkSource {
 		if (tile != null) {
 			tile.upload(image);
 			this.coverageVersion++;
+			if (this.overlays != null) {
+				// This bake recorded no overlays, and needs a live one to get them back.
+				int blocks = (Projection.TILE_PIXELS / TileImage.BLOCK) * (Projection.TILE_PIXELS / TileImage.BLOCK);
+				this.dirty.computeIfAbsent(key, k -> new Dirty(0)).blocks.set(0, blocks);
+			}
 		}
 		this.pixelsMoved(key);
 		store.baked(image);
@@ -1291,7 +1301,7 @@ public final class MapLevel implements ChunkSource {
 			return false;
 		}
 		for (int pixel : pixels) {
-			if ((pixel >>> 24) == 0) {
+			if ((pixel >>> 24) != 0xFF) {
 				return false;
 			}
 		}
@@ -1299,15 +1309,17 @@ public final class MapLevel implements ChunkSource {
 	}
 
 	/**
-	 * Bakes a sky view tile from {@code source} on the calling thread, merged with what's saved like
+	 * Bakes a sky view tile from {@code saved} on the calling thread, merged with what's saved like
 	 * any bake, and waits for the render thread to take it. Returns whether it did; see
 	 * {@link #tileFromSave}. One at a time.
 	 */
-	boolean bakeFromSave(TileKey key, ChunkSource source, BlockLooks looks) {
+	boolean bakeFromSave(TileKey key, ChunkSource saved, BlockLooks looks) {
 		TileStore store = this.store;
 		if (store == null) {
 			return false;
 		}
+		// As for a live bake to be saved: the pixels and the spots have to see the same chunks.
+		ChunkSource source = new PinnedSource(saved);
 		int generation = this.generation(key);
 		this.savedTileRaced = false;
 		this.savedTileBaking = key;

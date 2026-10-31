@@ -371,6 +371,10 @@ public final class SavedChunkImport {
 			int cx = (regionX << 5) | (i & 31);
 			int cz = (regionZ << 5) | (i >> 5);
 			SavedChunks.Summary summary = this.save.summary(cx, cz);
+			if (this.stopped()) {
+				// That read may have been cut short, which says nothing about the chunk.
+				return null;
+			}
 			if (summary == null || !summary.finished()) {
 				// Nothing to draw yet. Once it's finished, the save writes it again.
 				progress.mark(regionX, regionZ, i, time);

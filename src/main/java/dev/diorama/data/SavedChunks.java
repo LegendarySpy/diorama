@@ -69,7 +69,7 @@ import org.jspecify.annotations.Nullable;
  * <p>All reads block, so call them off the render thread, and from one thread at a time.
  */
 public final class SavedChunks {
-	private static final Pattern REGION_FILE = Pattern.compile("r\\.(-?\\d+)\\.(-?\\d+)\\.mca");
+	private static final Pattern REGION_FILE = Pattern.compile("r\\.(-?\\d{1,8})\\.(-?\\d{1,8})\\.mca");
 	/** Chunks kept between reads: drawing a tile reads the same chunks over again for their biomes. */
 	private static final int CACHED_CHUNKS = 1024;
 	/** A server tick has 50 ms; past this the game is close to slowing down. */
