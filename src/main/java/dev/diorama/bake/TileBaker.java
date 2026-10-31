@@ -312,32 +312,32 @@ public final class TileBaker {
 	}
 
 	/**
-	 * What each pixel of a cave slice's tile shows, for lights drawn over it: where its camera ray
+	 * What each pixel of tile pixels (x0, y0) to (x0 + width, y0 + height) of a cave slice shows, for lights drawn over it: where its camera ray
 	 * lands, which way the face there points, the pixel as baked with its light taken out, and
 	 * what lit it. Water counts as ground at its surface. With {@code fogOfWar}, ground not seen
 	 * yet has none, as the tile shows none. Any thread.
 	 */
-	public static TileSurface surface(TileKey key, int revision, ChunkSource source, BlockLooks looks, boolean fogOfWar) {
+	public static TileSurface surface(TileKey key, int revision, ChunkSource source, BlockLooks looks, boolean fogOfWar, int x0, int y0, int width, int height) {
 		TileBaker baker = new TileBaker(key, source, looks, fogOfWar, null);
-		int size = Projection.TILE_PIXELS;
-		TileSurface surface = new TileSurface(revision, new float[size * size], new boolean[size * size], new int[size * size], new int[size * size], new boolean[size * size]);
+		int count = width * height;
+		TileSurface surface = new TileSurface(revision, x0, y0, width, height, new float[count], new boolean[count], new int[count], new int[count], new boolean[count]);
 		java.util.Arrays.fill(surface.y(), Float.NaN);
 		// Only cave slices, and not under a roof, where the light is lifted off the rock above.
 		if (!baker.cave || baker.startY <= baker.limitY || baker.lifted) {
 			return surface;
 		}
-		int[] pixels = new int[size * size];
-		float[] linear = new float[size * size * 4];
-		baker.bakePixels(0, 0, size, size, pixels, null, linear);
+		int[] pixels = new int[count];
+		float[] linear = new float[count * 4];
+		baker.bakePixels(x0, y0, width, height, pixels, null, linear);
 		double unitsPerPixel = 1.0 / Projection.PIXELS_PER_UNIT;
 		baker.surfaceOnly = true;
-		for (int py = 0; py < size; py++) {
-			for (int px = 0; px < size; px++) {
-				int i = py * size + px;
+		for (int py = 0; py < height; py++) {
+			for (int px = 0; px < width; px++) {
+				int i = py * width + px;
 				baker.surfaceY = Float.NaN;
 				baker.surfaceLight = 0;
-				double u = key.minU() + (px + 0.5) * unitsPerPixel;
-				double v = key.minV() + (py + 0.5) * unitsPerPixel;
+				double u = key.minU() + (x0 + px + 0.5) * unitsPerPixel;
+				double v = key.minV() + (y0 + py + 0.5) * unitsPerPixel;
 				if (pixels[i] == 0 || !baker.trace(u, v, 0) || Float.isNaN(baker.surfaceY)) {
 					continue;
 				}

@@ -141,6 +141,7 @@ public final class Lights {
 	 * their face would.
 	 */
 	public void draw(GuiGraphicsExtractor graphics, MapViewport.View view, float partialTick, float opacity, boolean radar) {
+		this.map.releaseSurfaces();
 		Player self = Minecraft.getInstance().player;
 		if (view.layer() == TileKey.SURFACE || this.map.roofless() || self == null) {
 			this.close();
@@ -154,7 +155,7 @@ public final class Lights {
 		List<Held> held = new ArrayList<>();
 		for (Player player : this.level.players()) {
 			int carried = carried(player);
-			if (carried <= 0 || player != self && !(radar && onRadar(player, self, partialTick))) {
+			if (carried <= 0 || player != self && !(radar && onRadar(player, self, partialTick) && simulated(player, self))) {
 				continue;
 			}
 			Vec3 eye = player.getEyePosition(partialTick);
@@ -271,6 +272,12 @@ public final class Lights {
 			}
 		}
 		return left;
+	}
+
+	/** Whether {@code player} is within the simulation distance of {@code self}: the world past it stands still. */
+	private boolean simulated(Player player, Player self) {
+		int reach = this.level.getServerSimulationDistance();
+		return Math.abs(player.getBlockX() - self.getBlockX()) >> 4 <= reach && Math.abs(player.getBlockZ() - self.getBlockZ()) >> 4 <= reach;
 	}
 
 	/** Whether the radar shows {@code player} to {@code self}, as it does other players. */

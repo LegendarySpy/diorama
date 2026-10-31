@@ -61,6 +61,17 @@ public final class MapLevel implements ChunkSource {
 			return thread;
 		}
 	);
+	/** Finds the ground under lights, beside the bakers: a tile bake never queues behind it. */
+	private static final ExecutorService SURFACES = Executors.newSingleThreadExecutor(task -> {
+		Thread thread = new Thread(task, "diorama-surface");
+		thread.setDaemon(true);
+		thread.setPriority(Thread.MIN_PRIORITY);
+		return thread;
+	});
+	/** The least time between a tile's surfaces while its pixels keep changing, as with moving vines or water. */
+	private static final long SURFACE_INTERVAL_MS = 500;
+	/** How long a surface stays after the last light left it, so a light going back and forth doesn't remake it. */
+	private static final long SURFACE_KEEP_MS = 5000;
 	/**
 	 * Bakes the GPU self-check's tiles both ways, one at a time, beside the bakers: the map gets
 	 * those tiles traced as usual, so checking never makes it wait.
@@ -99,6 +110,8 @@ public final class MapLevel implements ChunkSource {
 
 	// Render thread only below here.
 	private final Map<TileKey, MapTile> tiles = new HashMap<>();
+	/** The tiles lights have asked for surfaces of and may hold one. */
+	private final Set<TileKey> surfaced = new HashSet<>();
 	/** Goes up whenever a tile's coverage changes or a tile comes or goes; see {@link #coverageVersion()}. */
 	private long coverageVersion;
 	private final Map<TileKey, Dirty> dirty = new HashMap<>();
@@ -577,23 +590,32 @@ public final class MapLevel implements ChunkSource {
 		TileSurface[] tiles = new TileSurface[columns * rows];
 		for (int row = 0; row < rows; row++) {
 			for (int column = 0; column < columns; column++) {
-				tiles[row * columns + column] = this.surface(new TileKey(layer, tu0 + column, tv0 + row, 0));
+				int minPu = (tu0 + column) * size;
+				int minPv = (tv0 + row) * size;
+				tiles[row * columns + column] = this.surface(
+					new TileKey(layer, tu0 + column, tv0 + row, 0),
+					Math.max(pu0 - minPu, 0), Math.max(pv0 - minPv, 0), Math.min(pu1 - minPu, size), Math.min(pv1 - minPv, size)
+				);
 			}
 		}
 		return new SurfaceArea(tu0, tv0, columns, rows, tiles);
 	}
 
 	/**
-	 * What the camera sees at each pixel of a baked cave slice tile, made on a baker thread the
-	 * first time it's asked for and again after the tile's pixels change. Until a new one is
-	 * ready the last one stands in; null before the first, and for tiles that have none (the
-	 * surface, overviews, under a roof). Render thread.
+	 * What the camera sees at tile pixels (x0, y0) to (x1, y1) of a baked cave slice tile, and a
+	 * little around them so a walking light seldom outgrows it. Made on the surface thread, again
+	 * if the light moves out of it or at most every {@link #SURFACE_INTERVAL_MS} if its pixels
+	 * change. Until a new one is ready the last one stands in; null before the first, and for
+	 * tiles that have none (the surface, overviews, under a roof). Render thread.
 	 */
-	public @Nullable TileSurface surface(TileKey key) {
+	private @Nullable TileSurface surface(TileKey key, int x0, int y0, int x1, int y1) {
 		MapTile tile = this.tiles.get(key);
 		if (tile == null || key.lod() != 0 || key.layer() == TileKey.SURFACE || this.roofless()) {
 			return null;
 		}
+		long now = System.currentTimeMillis();
+		tile.surfaceAsked = now;
+		this.surfaced.add(key);
 		if (tile.surfacePending != null && tile.surfacePending.isDone()) {
 			TileSurface made = tile.surfacePending.getNow(null);
 			tile.surfacePending = null;
@@ -602,16 +624,48 @@ public final class MapLevel implements ChunkSource {
 			}
 		}
 		BlockLooks looks = BlockLooks.get();
-		if (tile.surfacePending == null && looks != null && (tile.surface == null || tile.surface.revision() != tile.pixelsRevision)) {
-			int revision = tile.pixelsRevision;
+		TileSurface surface = tile.surface;
+		boolean outgrown = surface == null || !surface.covers(x0, y0, x1, y1);
+		boolean stale = surface != null && surface.revision() != tile.surfaceChanges && now - tile.surfaceStarted >= SURFACE_INTERVAL_MS;
+		if (tile.surfacePending == null && looks != null && (outgrown || stale)) {
+			int revision = tile.surfaceChanges;
 			boolean fog = this.fogOfWar;
-			tile.surfacePending = CompletableFuture.supplyAsync(() -> TileBaker.surface(key, revision, this, looks, fog), BAKERS)
-				.exceptionally(e -> {
+			int size = Projection.TILE_PIXELS;
+			int edge = TileImage.BLOCK;
+			int ax0 = Math.max(0, Math.floorDiv(x0, edge) * edge - edge);
+			int ay0 = Math.max(0, Math.floorDiv(y0, edge) * edge - edge);
+			int ax1 = Math.min(size, (Math.floorDiv(x1 - 1, edge) + 2) * edge);
+			int ay1 = Math.min(size, (Math.floorDiv(y1 - 1, edge) + 2) * edge);
+			tile.surfaceStarted = now;
+			tile.surfacePendingArea = new int[] {ax0, ay0, ax1, ay1};
+			tile.surfacePending = CompletableFuture.supplyAsync(() -> {
+				try {
+					return TileBaker.surface(key, revision, this, looks, fog, ax0, ay0, ax1 - ax0, ay1 - ay0);
+				} catch (RuntimeException e) {
 					Diorama.LOGGER.warn("Couldn't find the ground under tile {}", key, e);
 					return null;
-				});
+				}
+			}, SURFACES);
 		}
-		return tile.surface;
+		return surface;
+	}
+
+	/** Frees the surfaces no light has asked for lately, and skips those still queued. Render thread. */
+	public void releaseSurfaces() {
+		long now = System.currentTimeMillis();
+		for (Iterator<TileKey> it = this.surfaced.iterator(); it.hasNext(); ) {
+			MapTile tile = this.tiles.get(it.next());
+			if (tile == null) {
+				it.remove();
+			} else if (now - tile.surfaceAsked > SURFACE_KEEP_MS) {
+				if (tile.surfacePending != null) {
+					tile.surfacePending.cancel(false);
+					tile.surfacePending = null;
+				}
+				tile.surface = null;
+				it.remove();
+			}
+		}
 	}
 
 	/** Whether overview tiles exist for zooming far out: only when the map is saved. */

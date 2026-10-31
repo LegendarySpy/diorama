@@ -134,7 +134,7 @@ public final class MapViewport {
 	 * Measured in screen pixels, as a GUI pixel is several on a high-density display; a whole GUI
 	 * pixel per tile pixel or more is always crisp.
 	 */
-	private static Sampling sampling(View view) {
+	public static Sampling sampling(View view) {
 		double screenPixelsPerPixel = view.zoom() * Minecraft.getInstance().getWindow().getGuiScale() / Projection.PIXELS_PER_UNIT;
 		return view.zoom() >= Projection.PIXELS_PER_UNIT || screenPixelsPerPixel >= CRISP_FROM ? Sampling.TILE_CRISP : Sampling.TILE_SMOOTH;
 	}

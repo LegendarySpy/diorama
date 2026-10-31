@@ -17,26 +17,27 @@ public record SurfaceArea(int tileU0, int tileV0, int columns, int rows, @Nullab
 		return column < 0 || row < 0 || column >= this.columns || row >= this.rows ? null : this.tiles[row * this.columns + column];
 	}
 
-	private static int index(int pu, int pv) {
-		return Math.floorMod(pv, Projection.TILE_PIXELS) * Projection.TILE_PIXELS + Math.floorMod(pu, Projection.TILE_PIXELS);
+	private static int index(TileSurface surface, int pu, int pv) {
+		return surface.index(Math.floorMod(pu, Projection.TILE_PIXELS), Math.floorMod(pv, Projection.TILE_PIXELS));
 	}
 
 	/** The ground's world y at map pixel (pu, pv), or NaN. */
 	public float y(int pu, int pv) {
 		TileSurface surface = this.at(pu, pv);
-		return surface == null ? Float.NaN : surface.y()[index(pu, pv)];
+		int i = surface == null ? -1 : index(surface, pu, pv);
+		return i < 0 ? Float.NaN : surface.y()[i];
 	}
 
-	/** Whether the ground at map pixel (pu, pv) is a top face (else a south one). */
+	/** Whether the ground at map pixel (pu, pv), which has some, is a top face (else a south one). */
 	public boolean top(int pu, int pv) {
 		TileSurface surface = this.at(pu, pv);
-		return surface == null || surface.top()[index(pu, pv)];
+		return surface.top()[index(surface, pu, pv)];
 	}
 
-	/** The block light level at map pixel (pu, pv) of a cave slice, 0..15. */
+	/** The block light level at map pixel (pu, pv) of a cave slice, which has ground, 0..15. */
 	public int blockLight(int pu, int pv) {
 		TileSurface surface = this.at(pu, pv);
-		return surface == null ? 0 : surface.light()[index(pu, pv)] & 15;
+		return surface.light()[index(surface, pu, pv)] & 15;
 	}
 
 	/**
@@ -46,7 +47,7 @@ public record SurfaceArea(int tileU0, int tileV0, int columns, int rows, @Nullab
 	 */
 	public int relit(int pu, int pv, float blockLight, int alpha, MapStyle style, float[] scratch) {
 		TileSurface surface = this.at(pu, pv);
-		int i = index(pu, pv);
+		int i = index(surface, pu, pv);
 		surface.caveLight(i, blockLight, scratch);
 		int albedo = surface.albedo()[i];
 		float[] lin = TileBaker.SRGB_TO_LINEAR;

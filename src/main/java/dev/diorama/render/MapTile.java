@@ -34,8 +34,35 @@ public final class MapTile {
 	/** The ground under the tile's pixels, for lights; see {@link MapLevel#surface}. */
 	@Nullable TileSurface surface;
 	@Nullable CompletableFuture<@Nullable TileSurface> surfacePending;
+	/** The tile pixels (x0, y0, x1, y1) {@link #surfacePending} covers. */
+	int @Nullable [] surfacePendingArea;
+	/** Goes up whenever pixels {@link #surface} or {@link #surfacePending} covers change. */
+	int surfaceChanges;
+	/** When {@link #surfacePending} was last started, and when lights last asked for the surface. */
+	long surfaceStarted;
+	long surfaceAsked;
+
+	/** Notes a re-bake for the surface, if it changes pixels the surface covers. */
+	private void surfaceChanged(TileImage image) {
+		if (image.isFull()) {
+			this.surfaceChanges++;
+			return;
+		}
+		int edge = TileImage.BLOCK;
+		for (TileImage.Patch patch : image.patches()) {
+			int x0 = patch.blockX() * edge;
+			int y0 = patch.blockY() * edge;
+			int[] area = this.surfacePendingArea;
+			if (this.surface != null && this.surface.touches(x0, y0, x0 + edge, y0 + edge)
+				|| this.surfacePending != null && x0 < area[2] && area[0] < x0 + edge && y0 < area[3] && area[1] < y0 + edge) {
+				this.surfaceChanges++;
+				return;
+			}
+		}
+	}
 
 	void upload(TileImage image) {
+		this.surfaceChanged(image);
 		if (image.isFull()) {
 			this.coverage = image.coverage();
 			this.info = image.info();
