@@ -3152,6 +3152,7 @@ public class DioramaClientTest implements FabricClientGameTest {
 			throw new AssertionError("Changing GUI scale replaced the typed X with " + keptX);
 		}
 		typeInto(context, 2, pickedX);
+		typeInto(context, 1, "wY");
 		clickButton(context, "diorama.waypoint.save");
 		context.waitTicks(5);
 		int count = context.computeOnClient(mc -> WaypointStore.get().all().size());
@@ -3159,6 +3160,9 @@ public class DioramaClientTest implements FabricClientGameTest {
 			throw new AssertionError("Expected 3 waypoints after saving the picked one, found " + count);
 		}
 		Waypoint picked = context.computeOnClient(mc -> WaypointStore.get().all().get(2));
+		if (!picked.initials.equals("wY")) {
+			throw new AssertionError("Typed initials wY were saved as " + picked.initials);
+		}
 		// The hit block sits under the waypoint; the ray through the middle of the pixel row clicked
 		// crosses its top or south face.
 		int hitY = picked.y - 1;
@@ -3317,6 +3321,7 @@ public class DioramaClientTest implements FabricClientGameTest {
 		// and it survives a round trip.
 		context.runOnClient(mc -> {
 			Waypoint sent = new Waypoint("Mine: east-2_b", 120, 40, -80, "minecraft:the_nether", Waypoint.PALETTE[3]);
+			sent.initials = "mE";
 			String text = WaypointShare.format(sent).orElseThrow(() -> new AssertionError("Couldn't format a short waypoint"));
 			//? if >=1.21.9 {
 			if (text.length() > 256 || !text.codePoints().allMatch(net.minecraft.util.StringUtil::isAllowedChatCharacter)) {
@@ -3329,7 +3334,7 @@ public class DioramaClientTest implements FabricClientGameTest {
 			if (!text.startsWith("xaero-waypoint:Mine^col^ east^min^2-b:")) {
 				throw new AssertionError("Not escaped like Xaero's Minimap: " + text);
 			}
-			if (!back.name().equals("Mine: east-2_b") || back.x() != 120 || back.y() != 40 || back.z() != -80 || !back.dimension().equals("minecraft:the_nether")) {
+			if (!back.name().equals("Mine: east-2_b") || !back.initials().equals("mE") || back.x() != 120 || back.y() != 40 || back.z() != -80 || !back.dimension().equals("minecraft:the_nether")) {
 				throw new AssertionError("Round trip of " + text + " gave " + back);
 			}
 			// A name cut to the editor's 32 characters never ends in half an emoji.
@@ -3356,7 +3361,7 @@ public class DioramaClientTest implements FabricClientGameTest {
 		assertConnected(context, "a share with an out-of-range number");
 
 		// Someone else's share arrives: its line gets an [Add] link.
-		world.getServer().runCommand("tellraw @a \"xaero-waypoint:Old Mine:O:120:40:-80:6:false:0:Internal-overworld-waypoints\"");
+		world.getServer().runCommand("tellraw @a \"xaero-waypoint:Old Mine:oM:120:40:-80:6:false:0:Internal-overworld-waypoints\"");
 		context.waitTicks(10);
 		context.takeScreenshot("waypoints-07-shared-in-chat");
 		// Take the command from the [Add] link on the line chat actually received, and run it the
@@ -3401,7 +3406,7 @@ public class DioramaClientTest implements FabricClientGameTest {
 				}
 			}
 			String hex = dev.diorama.waypoint.WaypointColours.hex(((WaypointEditScreen) mc.gui.screen()).waypoint().color);
-			if (!shown.equals(java.util.List.of("Old Mine", "O", "120", "40", "-80", hex))) {
+			if (!shown.equals(java.util.List.of("Old Mine", "oM", "120", "40", "-80", hex))) {
 				throw new AssertionError("The editor shows " + shown);
 			}
 		});
@@ -4785,13 +4790,13 @@ public class DioramaClientTest implements FabricClientGameTest {
 	}
 
 	/** Clicks a button with the mouse, which does nothing while it's off (unlike clickScreenButton). */
-	private static void clickButton(ClientGameTestContext context, String translationKey) {
+	static void clickButton(ClientGameTestContext context, String translationKey) {
 		String label = net.minecraft.network.chat.Component.translatable(translationKey).getString();
 		clickAt(context, context.computeOnClient(mc -> buttonLabelled(mc.gui.screen(), label)));
 	}
 
 	/** Clicks a text field, empties it and types into it. */
-	private static void typeInto(ClientGameTestContext context, int field, String text) {
+	static void typeInto(ClientGameTestContext context, int field, String text) {
 		clickAt(context, context.computeOnClient(mc -> editBoxes(mc.gui.screen()).get(field)));
 		// The test input's Ctrl+A doesn't select, so the field is emptied directly; the typing is real.
 		context.runOnClient(mc -> editBoxes(mc.gui.screen()).get(field).setValue(""));
