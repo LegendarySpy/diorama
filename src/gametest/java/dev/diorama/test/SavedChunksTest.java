@@ -9,6 +9,7 @@ import dev.diorama.render.SavedChunkImport;
 import net.fabricmc.fabric.api.client.gametest.v1.context.ClientGameTestContext;
 import net.fabricmc.fabric.api.client.gametest.v1.context.TestSingleplayerContext;
 import net.minecraft.core.BlockPos;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.levelgen.Heightmap;
 
@@ -40,7 +41,7 @@ final class SavedChunksTest {
 		int before = drawn(context);
 		int last = X + CHUNKS * 16 - 1;
 		world.getServer().runCommand("forceload add " + X + " " + Z + " " + last + " " + last);
-		for (int i = 0; !world.getServer().computeOnServer(server -> server.overworld().getChunkSource().getChunkNow(X >> 4, Z >> 4) != null && server.overworld().getChunkSource().getChunkNow(last >> 4, last >> 4) != null); i++) {
+		for (int i = 0; !world.getServer().computeOnServer(SavedChunksTest::allForcedChunksLoaded); i++) {
 			if (i > 2400) {
 				throw new AssertionError("The forced chunks never loaded");
 			}
@@ -117,6 +118,18 @@ final class SavedChunksTest {
 		if (context.computeOnClient(mc -> MapSession.get().savedChunks().drewChunk(at.getX() >> 4, at.getZ() >> 4))) {
 			throw new AssertionError("The chunk the player stands in was drawn from the save");
 		}
+	}
+
+	/** All of them: released half made, the ones still generating would save unfinished and never show. */
+	private static boolean allForcedChunksLoaded(MinecraftServer server) {
+		for (int dx = 0; dx < CHUNKS; dx++) {
+			for (int dz = 0; dz < CHUNKS; dz++) {
+				if (server.overworld().getChunkSource().getChunkNow((X >> 4) + dx, (Z >> 4) + dz) == null) {
+					return false;
+				}
+			}
+		}
+		return true;
 	}
 
 	private static int savedPixel(ClientGameTestContext context, TileKey tile, int pixel) {
