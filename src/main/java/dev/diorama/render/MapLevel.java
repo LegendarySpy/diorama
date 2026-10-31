@@ -1309,17 +1309,17 @@ public final class MapLevel implements ChunkSource {
 	}
 
 	/**
-	 * Bakes a sky view tile from {@code saved} on the calling thread, merged with what's saved like
+	 * Bakes a sky view tile from {@code save} on the calling thread, merged with what's saved like
 	 * any bake, and waits for the render thread to take it. Returns whether it did; see
 	 * {@link #tileFromSave}. One at a time.
 	 */
-	boolean bakeFromSave(TileKey key, ChunkSource saved, BlockLooks looks) {
+	boolean bakeFromSave(TileKey key, ChunkSource save, BlockLooks looks) {
 		TileStore store = this.store;
 		if (store == null) {
 			return false;
 		}
 		// As for a live bake to be saved: the pixels and the spots have to see the same chunks.
-		ChunkSource source = new PinnedSource(saved);
+		ChunkSource source = new PinnedSource(save);
 		int generation = this.generation(key);
 		this.savedTileRaced = false;
 		this.savedTileBaking = key;
