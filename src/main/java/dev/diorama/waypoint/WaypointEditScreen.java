@@ -4,7 +4,6 @@ import com.mojang.blaze3d.platform.InputConstants;
 import dev.diorama.render.Pins;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.Checkbox;
@@ -180,7 +179,7 @@ public final class WaypointEditScreen extends Screen {
 
 	private void pickIcon() {
 		this.preview.name = this.name.getValue().trim().isEmpty() ? this.waypoint.name : this.name.getValue().trim();
-		this.preview.initials = this.initials.getValue().trim().toUpperCase(Locale.ROOT);
+		this.preview.initials = this.initials.getValue().trim();
 		this.preview.color = this.color;
 		this.minecraft.gui.setScreen(new WaypointIconScreen(this, this.preview, this.icon, id -> {
 			this.icon = id;
@@ -434,7 +433,7 @@ public final class WaypointEditScreen extends Screen {
 		graphics.text(this.font, Component.translatable("diorama.waypoint.preview"), x0, this.top() + 5, LABEL, true);
 		ScreenArt.list(graphics, x0, y0, x1, y1);
 		this.preview.name = this.name.getValue().trim().isEmpty() ? this.waypoint.name : this.name.getValue().trim();
-		this.preview.initials = this.initials.getValue().trim().toUpperCase(Locale.ROOT);
+		this.preview.initials = this.initials.getValue().trim();
 		this.preview.color = this.color;
 		this.preview.kind = this.waypoint.kind;
 		this.preview.icon = this.icon;
@@ -533,7 +532,7 @@ public final class WaypointEditScreen extends Screen {
 		String name = this.name.getValue().trim();
 		Waypoint shown = new Waypoint(name.isEmpty() ? this.waypoint.name : name, x, y, z, this.waypoint.dimension, this.color);
 		String initials = this.initials.getValue().trim();
-		shown.initials = initials.isEmpty() ? shown.initials : initials.toUpperCase(Locale.ROOT);
+		shown.initials = initials.isEmpty() ? shown.initials : initials;
 		return shown;
 	}
 
@@ -568,7 +567,7 @@ public final class WaypointEditScreen extends Screen {
 			return;
 		}
 		this.waypoint.name = shown.name;
-		this.waypoint.initials = this.initials.getValue().trim().toUpperCase(Locale.ROOT);
+		this.waypoint.initials = this.initials.getValue().trim();
 		this.waypoint.x = shown.x;
 		this.waypoint.y = shown.y;
 		this.waypoint.z = shown.z;
