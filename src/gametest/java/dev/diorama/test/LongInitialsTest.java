@@ -20,7 +20,7 @@ import net.minecraft.world.level.levelgen.Heightmap;
 /**
  * Initials of one to four letters (opt-in: {@code long-initials}): pins in the world, on the square
  * and round minimap and on the map, badges at the minimap's edge and in the waypoint list, and the
- * editor, for the pictures.
+ * editor, for the pictures. Then initials typed in small letters, which stay as typed.
  */
 final class LongInitialsTest {
 	private LongInitialsTest() {
@@ -108,6 +108,63 @@ final class LongInitialsTest {
 			WaypointStore store = WaypointStore.get();
 			store.all().stream().toList().forEach(store::remove);
 		});
+		typedInSmallLetters(context, world, at);
+	}
+
+	/** Initials typed into the editor and saved with its button, then every place that shows them. */
+	private static void typedInSmallLetters(ClientGameTestContext context, TestSingleplayerContext world, BlockPos at) {
+		String[][] pins = {{"Сана", "СаН"}, {"Waypoint 427", "WwW"}, {"Гаражы", "гар"}, {"Pigs", "gypq"}, {"Base", "ab"}};
+		// Checked at the end, so a failing run still has the pictures of what went wrong.
+		java.util.List<String> changed = new java.util.ArrayList<>();
+		for (int i = 0; i < pins.length; i++) {
+			int index = i;
+			Waypoint waypoint = context.computeOnClient(mc -> {
+				int x = at.getX() - 15 + index * 7;
+				int z = at.getZ() - 18 - (index % 2) * 6;
+				return new Waypoint(pins[index][0], x, mc.level.getHeight(Heightmap.Types.MOTION_BLOCKING, x, z), z, "minecraft:overworld", Waypoint.PALETTE[(index * 3 + 1) % Waypoint.PALETTE.length]);
+			});
+			context.setScreen(() -> new WaypointEditScreen(null, waypoint, true));
+			context.waitTicks(3);
+			DioramaClientTest.typeInto(context, 1, pins[i][1]);
+			context.takeScreenshot("typed-initials-editor-" + i);
+			DioramaClientTest.clickButton(context, "diorama.waypoint.save");
+			context.waitTicks(3);
+			if (!waypoint.initials.equals(pins[i][1])) {
+				changed.add(pins[i][1] + " saved as " + waypoint.initials);
+			}
+		}
+		// Moving the mouse to Save turned the player: facing the pins again.
+		world.getServer().runCommand("tp @a " + (at.getX() + 0.5) + " " + at.getY() + " " + (at.getZ() + 0.5) + " 180 15");
+		context.waitTicks(220);
+		context.takeScreenshot("typed-initials-world");
+		context.setScreen(MapScreen::new);
+		context.getInput().setCursorPos(1500, 880);
+		context.runOnClient(mc -> ((MapScreen) mc.gui.screen()).lookAt(at.getX(), Projection.v(at.getY(), at.getZ() - 20), 4.0, TileKey.SURFACE));
+		settle(context, 60);
+		context.takeScreenshot("typed-initials-map");
+		context.setScreen(() -> new WaypointListScreen(null));
+		context.waitTicks(5);
+		context.takeScreenshot("typed-initials-list");
+
+		// Saving an imported waypoint's editor without touching its initials leaves them as they came.
+		Waypoint imported = context.computeOnClient(mc -> WaypointStore.get().all().get(0));
+		context.runOnClient(mc -> imported.initials = "Ал");
+		context.setScreen(() -> new WaypointEditScreen(null, imported, false));
+		context.waitTicks(3);
+		context.takeScreenshot("typed-initials-reopened");
+		DioramaClientTest.clickButton(context, "diorama.waypoint.save");
+		context.waitTicks(3);
+		if (!imported.initials.equals("Ал")) {
+			changed.add("Ал saved as " + imported.initials);
+		}
+		context.setScreen(() -> null);
+		context.runOnClient(mc -> {
+			WaypointStore store = WaypointStore.get();
+			store.all().stream().toList().forEach(store::remove);
+		});
+		if (!changed.isEmpty()) {
+			throw new AssertionError("The editor changed what was typed: " + changed);
+		}
 	}
 
 	/** Waits until no tile has been baking for a while. */

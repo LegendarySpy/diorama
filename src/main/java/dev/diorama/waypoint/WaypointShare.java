@@ -122,7 +122,7 @@ public final class WaypointShare {
 			|| color > 15 || dimension == null) {
 			return Optional.empty();
 		}
-		return Optional.of(new Shared(name, initials.toString().toUpperCase(Locale.ROOT), x, y, z, color, dimension));
+		return Optional.of(new Shared(name, initials.toString(), x, y, z, color, dimension));
 	}
 
 	/** At most {@code max} characters of {@code text}, never splitting a character in two. */

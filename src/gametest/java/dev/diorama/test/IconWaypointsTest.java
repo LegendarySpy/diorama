@@ -53,6 +53,11 @@ final class IconWaypointsTest {
 		sleep(context, world, first);
 		expectBed(context, second, "after sleeping with bed pins off");
 		context.runOnClient(mc -> Settings.get().bedMarkers = true);
+		//? if >=26.3 {
+		// A straw bed leaves the respawn point alone, so the pin stays on the last real bed.
+		sleep(context, world, at.offset(9, 0, 0), "straw_bed");
+		expectBed(context, second, "after sleeping in a straw bed");
+		//?}
 
 		// An icon is saved with its waypoint.
 		String saved = context.computeOnClient(mc -> {
@@ -106,8 +111,12 @@ final class IconWaypointsTest {
 
 	/** Puts a bed with its head at {@code head} and has the player lie down in it, then get up. */
 	private static void sleep(ClientGameTestContext context, TestSingleplayerContext world, BlockPos head) {
-		world.getServer().runCommand("setblock " + head.getX() + " " + head.getY() + " " + (head.getZ() + 1) + " red_bed[facing=north,part=foot]");
-		world.getServer().runCommand("setblock " + head.getX() + " " + head.getY() + " " + head.getZ() + " red_bed[facing=north,part=head]");
+		sleep(context, world, head, "red_bed");
+	}
+
+	private static void sleep(ClientGameTestContext context, TestSingleplayerContext world, BlockPos head, String bed) {
+		world.getServer().runCommand("setblock " + head.getX() + " " + head.getY() + " " + (head.getZ() + 1) + " " + bed + "[facing=north,part=foot]");
+		world.getServer().runCommand("setblock " + head.getX() + " " + head.getY() + " " + head.getZ() + " " + bed + "[facing=north,part=head]");
 		// The game wakes anyone asleep in daylight.
 		world.getServer().runCommand("time set midnight");
 		world.getServer().runOnServer(server -> server.getPlayerList().getPlayers().get(0).startSleeping(head));
