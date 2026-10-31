@@ -97,7 +97,7 @@ public final class Waypoints {
 	/**
 	 * Keeps a bed waypoint where the player last lay down to sleep, one per dimension, moved when
 	 * they sleep somewhere else. Lying down is what the client sees of the server setting their
-	 * respawn point. Called every tick.
+	 * respawn point, on any bed that sets one. Called every tick.
 	 */
 	public static void watchSleep(Minecraft mc) {
 		LocalPlayer player = mc.player;
@@ -116,6 +116,13 @@ public final class Waypoints {
 		if (store == null || dimension == null) {
 			return false;
 		}
+		//? if >=26.3 {
+		// A straw bed is for a night away: the respawn point stays where it was, and so does the pin.
+		var level = Minecraft.getInstance().level;
+		if (level.getBlockState(pos).getBlock() instanceof net.minecraft.world.level.block.AbstractBedBlock bed && bed.getBedRule(level, pos).canSetSpawn() == net.minecraft.world.attribute.BedRule.Rule.NEVER) {
+			return true;
+		}
+		//?}
 		for (Waypoint waypoint : store.in(dimension)) {
 			if (waypoint.kind == Waypoint.Kind.BED) {
 				waypoint.x = pos.getX();
