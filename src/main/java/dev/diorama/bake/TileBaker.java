@@ -344,9 +344,19 @@ public final class TileBaker {
 				int i = py * width + px;
 				baker.surfaceY = Float.NaN;
 				baker.surfaceLight = 0;
+				if (pixels[i] == 0) {
+					continue;
+				}
+				// The middle of the pixel first; at an edge it can miss what the pixel's samples hit.
 				double u = key.minU() + (x0 + px + 0.5) * unitsPerPixel;
 				double v = key.minV() + (y0 + py + 0.5) * unitsPerPixel;
-				if (pixels[i] == 0 || !baker.trace(u, v, 0) || Float.isNaN(baker.surfaceY)) {
+				boolean hit = baker.trace(u, v, 0) && !Float.isNaN(baker.surfaceY);
+				for (int s = 0; s < SAMPLES.length && !hit; s++) {
+					baker.surfaceY = Float.NaN;
+					baker.surfaceLight = 0;
+					hit = baker.trace(key.minU() + (x0 + px + SAMPLES[s][0]) * unitsPerPixel, key.minV() + (y0 + py + SAMPLES[s][1]) * unitsPerPixel, s) && !Float.isNaN(baker.surfaceY);
+				}
+				if (!hit) {
 					continue;
 				}
 				surface.y()[i] = baker.surfaceY;

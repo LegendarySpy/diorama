@@ -71,6 +71,8 @@ public final class MapLevel implements ChunkSource {
 	});
 	/** The least time between a tile's surfaces while its pixels keep changing, as with moving vines or water. */
 	private static final long SURFACE_INTERVAL_MS = 500;
+	/** How long a request for part of a tile counts: long enough for every light's turn, short enough to let a walked-away part go. */
+	private static final long SURFACE_WANTED_MS = 1000;
 	/** How long a surface stays after the last light left it, so a light going back and forth doesn't remake it. */
 	private static final long SURFACE_KEEP_MS = 5000;
 	/**
@@ -609,8 +611,8 @@ public final class MapLevel implements ChunkSource {
 	}
 
 	/**
-	 * What the camera sees at tile pixels (x0, y0) to (x1, y1) of a baked cave slice tile, and a
-	 * little around them so a walking light seldom outgrows it. Made on the surface thread, again
+	 * What the camera sees at tile pixels (x0, y0) to (x1, y1) of a baked cave slice tile, with
+	 * what other lights asked for lately and a little around them so a walking light seldom outgrows it. Made on the surface thread, again
 	 * if the light moves out of it or at most every {@link #SURFACE_INTERVAL_MS} if its pixels
 	 * change. Until a new one is ready the last one stands in; null before the first, and for
 	 * tiles that have none (the surface, overviews, under a roof). Render thread.
@@ -632,17 +634,27 @@ public final class MapLevel implements ChunkSource {
 		}
 		BlockLooks looks = BlockLooks.get();
 		TileSurface surface = tile.surface;
-		boolean outgrown = surface == null || !surface.covers(x0, y0, x1, y1);
+		int[] wanted = tile.surfaceWanted;
+		if (wanted == null || now - tile.surfaceWantedSince > SURFACE_WANTED_MS) {
+			wanted = tile.surfaceWanted = new int[] {x0, y0, x1, y1};
+			tile.surfaceWantedSince = now;
+		} else {
+			wanted[0] = Math.min(wanted[0], x0);
+			wanted[1] = Math.min(wanted[1], y0);
+			wanted[2] = Math.max(wanted[2], x1);
+			wanted[3] = Math.max(wanted[3], y1);
+		}
+		boolean outgrown = surface == null || !surface.covers(wanted[0], wanted[1], wanted[2], wanted[3]);
 		boolean stale = surface != null && surface.revision() != tile.surfaceChanges && now - tile.surfaceStarted >= SURFACE_INTERVAL_MS;
 		if (tile.surfacePending == null && looks != null && (outgrown || stale)) {
 			int revision = tile.surfaceChanges;
 			boolean fog = this.fogOfWar;
 			int size = Projection.TILE_PIXELS;
 			int edge = TileImage.BLOCK;
-			int ax0 = Math.max(0, Math.floorDiv(x0, edge) * edge - edge);
-			int ay0 = Math.max(0, Math.floorDiv(y0, edge) * edge - edge);
-			int ax1 = Math.min(size, (Math.floorDiv(x1 - 1, edge) + 2) * edge);
-			int ay1 = Math.min(size, (Math.floorDiv(y1 - 1, edge) + 2) * edge);
+			int ax0 = Math.max(0, Math.floorDiv(wanted[0], edge) * edge - edge);
+			int ay0 = Math.max(0, Math.floorDiv(wanted[1], edge) * edge - edge);
+			int ax1 = Math.min(size, (Math.floorDiv(wanted[2] - 1, edge) + 2) * edge);
+			int ay1 = Math.min(size, (Math.floorDiv(wanted[3] - 1, edge) + 2) * edge);
 			tile.surfaceStarted = now;
 			tile.surfacePendingArea = new int[] {ax0, ay0, ax1, ay1};
 			tile.surfacePending = CompletableFuture.supplyAsync(() -> {

@@ -276,7 +276,7 @@ public final class Lights {
 	/** Whether {@code player} is within the simulation distance of {@code self}: the world past it stands still. */
 	private boolean simulated(Player player, Player self) {
 		int reach = this.level.getServerSimulationDistance();
-		return Math.abs(player.getBlockX() - self.getBlockX()) >> 4 <= reach && Math.abs(player.getBlockZ() - self.getBlockZ()) >> 4 <= reach;
+		return Math.abs((player.getBlockX() >> 4) - (self.getBlockX() >> 4)) <= reach && Math.abs((player.getBlockZ() >> 4) - (self.getBlockZ() >> 4)) <= reach;
 	}
 
 	/** Whether the radar shows {@code player} to {@code self}, as it does other players. */
@@ -356,8 +356,9 @@ public final class Lights {
 		}
 		glow.madeFor = key;
 		// With shapes: fences, slabs and stairs let light by, as they do in the game.
-		VoxelReader reader = new VoxelReader(this.map, BlockLooks.get(), true);
-		glow.pending = CompletableFuture.supplyAsync(() -> build(reader, area, lights, taken, layer, pu0, pv0, pu1 - pu0, pv1 - pv0, style, sin, cos), WORKER);
+		BlockLooks looks = BlockLooks.get();
+		VoxelReader reader = new VoxelReader(this.map, looks, true);
+		glow.pending = CompletableFuture.supplyAsync(() -> build(reader, looks, area, lights, taken, layer, pu0, pv0, pu1 - pu0, pv1 - pv0, style, sin, cos), WORKER);
 	}
 
 	/** An overlay made: its mips, or null where it lights nothing brighter than the tiles. */
@@ -365,13 +366,13 @@ public final class Lights {
 	}
 
 	private static Made build(
-		VoxelReader reader, SurfaceArea area, List<Held> lights, List<Bounds> taken, int layer, int pu0, int pv0, int width, int height, MapStyle style, double sin, double cos
+		VoxelReader reader, BlockLooks looks, SurfaceArea area, List<Held> lights, List<Bounds> taken, int layer, int pu0, int pv0, int width, int height, MapStyle style, double sin, double cos
 	) {
 		int ppu = Projection.PIXELS_PER_UNIT;
 		float[][] levels = new float[lights.size()][];
 		for (int i = 0; i < levels.length; i++) {
 			Held light = lights.get(i);
-			levels[i] = spread(reader, light.sx(), light.sy(), light.sz(), light.carried(), light.carried() - 1, 2 * light.carried() - 1);
+			levels[i] = spread(reader, looks, light.sx(), light.sy(), light.sz(), light.carried(), light.carried() - 1, 2 * light.carried() - 1);
 		}
 		int step = 1 << (Mipmaps.LEVELS - 1);
 		int edge = (Math.max(width, height) + step - 1) / step * step;
@@ -456,10 +457,12 @@ public final class Lights {
 	 * across around it: {@code carried} less the length of the shortest path to each cell through
 	 * blocks that aren't solid. Levels by cell, x fastest, then z, then y.
 	 */
-	private static float[] spread(VoxelReader reader, int sx, int sy, int sz, int carried, int reach, int side) {
+	private static float[] spread(VoxelReader reader, BlockLooks looks, int sx, int sy, int sz, int carried, int reach, int side) {
 		float[] levels = new float[side * side * side];
 		// Per cell: 0 not looked at yet, 1 open, 2 closed.
 		byte[] open = new byte[levels.length];
+		// Per cell: the sides a block smaller than a cube fills completely, by side().
+		byte[] faces = new byte[levels.length];
 		PriorityQueue<Long> queue = new PriorityQueue<>();
 		int start = (reach * side + reach) * side + reach;
 		levels[start] = carried;
@@ -483,7 +486,7 @@ public final class Lights {
 				}
 				int next = (ny * side + nz) * side + nx;
 				float further = distance + STEP_LENGTHS[Math.abs(step[0]) + Math.abs(step[1]) + Math.abs(step[2])];
-				if (carried - further <= levels[next] || !passes(reader, open, side, sx - reach, sy - reach, sz - reach, x, y, z, step)) {
+				if (carried - further <= levels[next] || !passes(reader, looks, open, faces, side, sx - reach, sy - reach, sz - reach, x, y, z, step)) {
 					continue;
 				}
 				levels[next] = carried - further;
@@ -493,8 +496,19 @@ public final class Lights {
 		return levels;
 	}
 
-	/** Whether light can step from cell (x, y, z) by {@code step}: every cell the step crosses is open, so it can't squeeze between two blocks that touch at an edge. */
-	private static boolean passes(VoxelReader reader, byte[] open, int side, int x0, int y0, int z0, int x, int y, int z, int[] step) {
+	/**
+	 * Whether light can step from cell (x, y, z) by {@code step}: every cell the step crosses is
+	 * open, so it can't squeeze between two blocks that touch at an edge, and no block smaller than
+	 * a cube fills the side it would cross, as a slab's underside stops it and a fence doesn't.
+	 */
+	private static boolean passes(VoxelReader reader, BlockLooks looks, byte[] open, byte[] faces, int side, int x0, int y0, int z0, int x, int y, int z, int[] step) {
+		int here = (y * side + z) * side + x;
+		look(reader, looks, open, faces, here, x0 + x, y0 + y, z0 + z);
+		for (int axis = 0; axis < 3; axis++) {
+			if (step[axis] != 0 && (faces[here] & side(axis, step[axis])) != 0) {
+				return false;
+			}
+		}
 		// Each non-empty subset of the step's axes is a cell it crosses.
 		for (int c = 1; c < 8; c++) {
 			int dx = (c & 1) == 0 ? 0 : step[0];
@@ -504,16 +518,54 @@ public final class Lights {
 				continue;
 			}
 			int cell = ((y + dy) * side + z + dz) * side + x + dx;
-			if (open[cell] == 0) {
-				// Full solid blocks stop it, and so do blocks the map doesn't know yet.
-				int solid = reader.solid(x0 + x + dx, y0 + y + dy, z0 + z + dz);
-				open[cell] = (byte) (solid == 1 || solid == VoxelReader.UNKNOWN ? 2 : 1);
-			}
-			if (open[cell] == 2) {
+			look(reader, looks, open, faces, cell, x0 + x + dx, y0 + y + dy, z0 + z + dz);
+			if (open[cell] == 2
+				|| dx != 0 && (faces[cell] & side(0, -dx)) != 0
+				|| dy != 0 && (faces[cell] & side(1, -dy)) != 0
+				|| dz != 0 && (faces[cell] & side(2, -dz)) != 0) {
 				return false;
 			}
 		}
 		return true;
+	}
+
+	/** Fills in {@code open} and {@code faces} for a cell not looked at yet. */
+	private static void look(VoxelReader reader, BlockLooks looks, byte[] open, byte[] faces, int cell, int wx, int wy, int wz) {
+		if (open[cell] != 0) {
+			return;
+		}
+		// Full solid blocks stop it, and so do blocks the map doesn't know yet.
+		int solid = reader.solid(wx, wy, wz);
+		open[cell] = (byte) (solid == 1 || solid == VoxelReader.UNKNOWN ? 2 : 1);
+		if (solid == 2) {
+			int state = reader.state(wx, wy, wz);
+			faces[cell] = state < 0 ? 0 : filledSides(looks.shapes[looks.shape[state]]);
+		}
+	}
+
+	/** The bit for the side of a cell facing {@code sign} along {@code axis}, x, y or z. */
+	private static int side(int axis, int sign) {
+		return 1 << axis * 2 + (sign > 0 ? 1 : 0);
+	}
+
+	/** The sides one of these boxes (x0, y0, z0, x1, y1, z1 each) fills completely. */
+	private static byte filledSides(float[] boxes) {
+		int sides = 0;
+		for (int i = 0; i < boxes.length; i += 6) {
+			for (int axis = 0; axis < 3; axis++) {
+				int a = (axis + 1) % 3;
+				int b = (axis + 2) % 3;
+				if (boxes[i + a] <= 0.001F && boxes[i + a + 3] >= 0.999F && boxes[i + b] <= 0.001F && boxes[i + b + 3] >= 0.999F) {
+					if (boxes[i + axis] <= 0.001F) {
+						sides |= side(axis, -1);
+					}
+					if (boxes[i + axis + 3] >= 0.999F) {
+						sides |= side(axis, 1);
+					}
+				}
+			}
+		}
+		return (byte) sides;
 	}
 
 	/**
@@ -534,7 +586,11 @@ public final class Lights {
 			int x = bx + (c & 1);
 			int y = by + (c >> 1 & 1);
 			int z = bz + (c >> 2 & 1);
-			if (x < 0 || y < 0 || z < 0 || x >= side || y >= side || z >= side || reader.solid(x0 + x, y0 + y, z0 + z) == 1) {
+			if (x < 0 || y < 0 || z < 0 || x >= side || y >= side || z >= side) {
+				continue;
+			}
+			int solid = reader.solid(x0 + x, y0 + y, z0 + z);
+			if (solid == 1 || solid == VoxelReader.UNKNOWN) {
 				continue;
 			}
 			double w = ((c & 1) == 0 ? 1 - fx : fx) * ((c >> 1 & 1) == 0 ? 1 - fy : fy) * ((c >> 2 & 1) == 0 ? 1 - fz : fz);

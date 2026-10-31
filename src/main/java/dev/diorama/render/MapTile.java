@@ -41,6 +41,9 @@ public final class MapTile {
 	/** When {@link #surfacePending} was last started, and when lights last asked for the surface. */
 	long surfaceStarted;
 	long surfaceAsked;
+	/** All the tile pixels (x0, y0, x1, y1) lights asked for lately, as lights apart share a tile, and since when. */
+	int @Nullable [] surfaceWanted;
+	long surfaceWantedSince;
 
 	/** Notes a re-bake for the surface, if it changes pixels the surface covers. */
 	private void surfaceChanged(TileImage image) {
@@ -236,6 +239,10 @@ public final class MapTile {
 	}
 
 	void close() {
+		if (this.surfacePending != null) {
+			this.surfacePending.cancel(false);
+			this.surfacePending = null;
+		}
 		if (this.claims != null) {
 			this.claims.close();
 			this.claims = null;
