@@ -127,6 +127,9 @@ public class DioramaClientTest implements FabricClientGameTest {
 			if (tests.contains("long-initials")) {
 				LongInitialsTest.photos(context, world);
 			}
+			if (tests.contains("natural-waters")) {
+				NaturalWatersTest.run(context, world);
+			}
 			if (tests.contains("portal-crossing")) {
 				portalCrossing(context, world);
 			}

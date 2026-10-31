@@ -27,8 +27,21 @@ public final class BiomeTints {
 		*///?}
 		BiomeColors.WATER_COLOR_RESOLVER,
 	};
+	private static final int WATER = 3;
 
 	private BiomeTints() {
+	}
+
+	/**
+	 * The biome colour of water: the one the water's own tint code asks for, which a mod can make
+	 * its own (Natural Waters). {@link BlockLooks#build} finds it out.
+	 */
+	public static ColorResolver water() {
+		return RESOLVERS[WATER];
+	}
+
+	static void setWater(ColorResolver resolver) {
+		RESOLVERS[WATER] = resolver;
 	}
 
 	/** The snapshot's tints, blended now if no bake has needed them yet. Any thread. */
@@ -82,6 +95,6 @@ public final class BiomeTints {
 				}
 			}
 		}
-		return new ChunkSnapshot.Tints(colors[0], colors[1], colors[2], colors[3]);
+		return new ChunkSnapshot.Tints(colors[0], colors[1], colors[2], colors[WATER]);
 	}
 }

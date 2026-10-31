@@ -39,6 +39,7 @@ import net.neoforged.neoforge.client.extensions.common.IClientFluidTypeExtension
 *///?} else if <26.1 {
 /*import net.neoforged.neoforge.client.extensions.common.IClientFluidTypeExtensions;
 *///?}
+import net.minecraft.client.renderer.BiomeColors;
 import net.minecraft.client.renderer.texture.MissingTextureAtlasSprite;
 import net.minecraft.client.renderer.texture.SpriteContents;
 import net.minecraft.client.renderer.texture.TextureAtlas;
@@ -53,6 +54,7 @@ import net.minecraft.core.Direction;
 import net.minecraft.tags.BlockTags;
 import net.minecraft.tags.FluidTags;
 import net.minecraft.util.RandomSource;
+import net.minecraft.world.level.ColorResolver;
 import net.minecraft.world.level.EmptyBlockGetter;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.RenderShape;
@@ -63,6 +65,7 @@ import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.shapes.Shapes;
 import net.minecraft.world.phys.shapes.VoxelShape;
 import net.minecraft.world.level.material.Fluid;
+import net.minecraft.world.level.material.Fluids;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -328,6 +331,8 @@ public final class BlockLooks {
 		warnedFreed = false;
 		RandomSource random = RandomSource.create(42L);
 		TintProbe probe = new TintProbe();
+		// Before any block: those tinted like water ask for the same colour as water does.
+		BiomeTints.setWater(waterResolver(probe));
 		Map<VoxelShape, Integer> shapeByVoxels = new IdentityHashMap<>();
 		Map<String, Integer> shapeByBoxes = new HashMap<>();
 		List<float[]> shapes = new ArrayList<>();
@@ -669,6 +674,14 @@ public final class BlockLooks {
 		//?} else {
 		/*return Tint.ask(probe, () -> colors.getColor(state, probe, BlockPos.ZERO, index), () -> colors.getColor(state, null, null, index));
 		*///?}
+	}
+
+	/** The biome colour water's tint code asks for, the game's own if it asks for none. */
+	private static ColorResolver waterResolver(TintProbe probe) {
+		probe.reset();
+		fluidTint(Fluids.WATER.defaultFluidState(), probe);
+		ColorResolver asked = probe.asked();
+		return asked != null ? asked : BiomeColors.WATER_COLOR_RESOLVER;
 	}
 
 	/** The same for a fluid's tint code. */
