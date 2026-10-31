@@ -75,6 +75,11 @@ final class Lighting {
 	 * how much depth below the cut dims it ({@code fade}, 1 for none), its own glow (0..1) and
 	 * how much its side is darkened (1 for a top).
 	 */
+	/** How bright block and sky light make water in a cave slice; it takes no tint or ceiling. */
+	static float caveWater(float blockLight, int skyLight) {
+		return 0.42F + (float) Math.pow(Math.max(blockLight, skyLight * 0.8F) / 15.0F, 1.5) * 0.8F;
+	}
+
 	static void cave(float blockLight, int skyLight, float ao, float fade, float emission, float facing, float[] out) {
 		float bl = blockLight / 15.0F;
 		float sl = skyLight / 15.0F * 0.8F;

@@ -658,7 +658,7 @@ public final class MapLevel implements ChunkSource {
 	}
 
 	/** Frees the surfaces no light has asked for lately, and skips those still queued. Render thread. */
-	public void releaseSurfaces() {
+	private void releaseSurfaces() {
 		long now = System.currentTimeMillis();
 		for (Iterator<TileKey> it = this.surfaced.iterator(); it.hasNext(); ) {
 			MapTile tile = this.tiles.get(it.next());
@@ -688,6 +688,7 @@ public final class MapLevel implements ChunkSource {
 	/** Uploads finished bakes and starts new ones. Call regularly on the render thread. */
 	public void update() {
 		this.frame++;
+		this.releaseSurfaces();
 		TileKey changedOverview;
 		while ((changedOverview = this.overviewChanged.poll()) != null) {
 			this.emptyOverviews.remove(changedOverview);

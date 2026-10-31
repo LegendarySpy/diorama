@@ -141,7 +141,6 @@ public final class Lights {
 	 * their face would.
 	 */
 	public void draw(GuiGraphicsExtractor graphics, MapViewport.View view, float partialTick, float opacity, boolean radar) {
-		this.map.releaseSurfaces();
 		Player self = Minecraft.getInstance().player;
 		if (view.layer() == TileKey.SURFACE || this.map.roofless() || self == null) {
 			this.close();
@@ -356,7 +355,8 @@ public final class Lights {
 			return;
 		}
 		glow.madeFor = key;
-		VoxelReader reader = new VoxelReader(this.map, BlockLooks.get());
+		// With shapes: fences, slabs and stairs let light by, as they do in the game.
+		VoxelReader reader = new VoxelReader(this.map, BlockLooks.get(), true);
 		glow.pending = CompletableFuture.supplyAsync(() -> build(reader, area, lights, taken, layer, pu0, pv0, pu1 - pu0, pv1 - pv0, style, sin, cos), WORKER);
 	}
 

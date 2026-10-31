@@ -30,6 +30,9 @@ public record TileSurface(int revision, int x0, int y0, int width, int height, f
 		return x0 < this.x0 + this.width && this.x0 < x1 && y0 < this.y0 + this.height && this.y0 < y1;
 	}
 
+	/** Marks packed light ({@link #caveLight}) as water's, which {@link Lighting#caveWater} lights. */
+	static final int WATER = 1 << 28;
+
 	/**
 	 * Packs what lights a surface in a cave slice: block and sky light levels (0..15), corner
 	 * occlusion and depth fade (0..1), and the block's own light level (0..15).
@@ -51,6 +54,10 @@ public record TileSurface(int revision, int x0, int y0, int width, int height, f
 	 * without a side's darkening, in linear light; see {@link Lighting#cave}.
 	 */
 	static void caveLightOf(int packed, float blockLight, float[] out) {
+		if ((packed & WATER) != 0) {
+			java.util.Arrays.fill(out, 0, 3, Lighting.caveWater(blockLight, packed >> 4 & 15) * (packed >> 20 & 255) / 255.0F);
+			return;
+		}
 		Lighting.cave(blockLight, packed >> 4 & 15, (packed >> 12 & 255) / 255.0F, (packed >> 20 & 255) / 255.0F, (packed >> 8 & 15) / 15.0F, 1, out);
 	}
 

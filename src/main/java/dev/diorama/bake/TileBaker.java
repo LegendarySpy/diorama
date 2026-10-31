@@ -382,7 +382,7 @@ public final class TileBaker {
 	 */
 	private int waterLight(int x, int by, int bz, double y) {
 		float fade = 1 - Math.min(0.5F, (float) (this.startY - y) / 60.0F);
-		return TileSurface.caveLight(this.reader.blockLight(x, by + 1, bz), this.reader.skyLight(x, by + 1, bz), 1, fade, 0);
+		return TileSurface.caveLight(this.reader.blockLight(x, by + 1, bz), this.reader.skyLight(x, by + 1, bz), 1, fade, 0) | TileSurface.WATER;
 	}
 
 	private static int srgb(float r, float g, float b) {
@@ -1029,9 +1029,7 @@ public final class TileBaker {
 		float wb = this.albedoB;
 		float light;
 		if (this.lit) {
-			int bl = this.reader.blockLight(x, by + 1, bz);
-			int sl = this.reader.skyLight(x, by + 1, bz);
-			light = 0.42F + (float) Math.pow(Math.max(bl, sl * 0.8F) / 15.0F, 1.5) * 0.8F;
+			light = Lighting.caveWater(this.reader.blockLight(x, by + 1, bz), this.reader.skyLight(x, by + 1, bz));
 		} else {
 			double sy = this.sunY + SUN_JITTER[sample][1];
 			double ox = u;
