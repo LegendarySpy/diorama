@@ -3,6 +3,7 @@ package dev.diorama.waypoint;
 import dev.diorama.MapSession;
 import dev.diorama.MapStyle;
 import dev.diorama.Projection;
+import dev.diorama.bake.BiomeTints;
 import dev.diorama.bake.BlockLooks;
 import dev.diorama.bake.TileKey;
 import dev.diorama.render.MapLevel;
@@ -272,7 +273,7 @@ final class MapPiece {
 		int tint = switch (looks.tint[id]) {
 			case BlockLooks.TINT_GRASS -> BiomeColors.getAverageGrassColor(level, pos);
 			case BlockLooks.TINT_FOLIAGE, BlockLooks.TINT_DRY_FOLIAGE -> BiomeColors.getAverageFoliageColor(level, pos);
-			case BlockLooks.TINT_WATER -> BiomeColors.getAverageWaterColor(level, pos);
+			case BlockLooks.TINT_WATER -> level.getBlockTint(pos, BiomeTints.water());
 			default -> looks.constantTint[id] < 0 ? 0xFFFFFF : looks.constantTint[id];
 		};
 		float bw = 1 - w;

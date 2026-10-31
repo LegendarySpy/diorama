@@ -1,5 +1,6 @@
 package dev.diorama;
 
+import dev.diorama.bake.BiomeTints;
 import dev.diorama.bake.BlockLooks;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
@@ -256,7 +257,7 @@ final class DepthGauge {
 		int tint = switch (looks.tint[id]) {
 			case BlockLooks.TINT_GRASS -> BiomeColors.getAverageGrassColor(level, pos);
 			case BlockLooks.TINT_FOLIAGE, BlockLooks.TINT_DRY_FOLIAGE -> BiomeColors.getAverageFoliageColor(level, pos);
-			case BlockLooks.TINT_WATER -> BiomeColors.getAverageWaterColor(level, pos);
+			case BlockLooks.TINT_WATER -> level.getBlockTint(pos, BiomeTints.water());
 			default -> looks.constantTint[id] < 0 ? 0xFFFFFF : looks.constantTint[id];
 		};
 		int r = mix(base >> 16, tinted >> 16, tint >> 16, w);

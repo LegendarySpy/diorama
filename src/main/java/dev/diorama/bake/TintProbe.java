@@ -39,6 +39,11 @@ final class TintProbe implements BlockAndTintGetter {
 		return this.asked != null;
 	}
 
+	/** The biome colour the tint code asked for first, or null. */
+	@Nullable ColorResolver asked() {
+		return this.asked;
+	}
+
 	/** The {@code BlockLooks.TINT_*} kind of the biome colour asked for, or {@code TINT_NONE}. */
 	byte kind() {
 		ColorResolver resolver = this.asked;
@@ -53,7 +58,7 @@ final class TintProbe implements BlockAndTintGetter {
 			return BlockLooks.TINT_DRY_FOLIAGE;
 		}
 		//?}
-		if (resolver == BiomeColors.WATER_COLOR_RESOLVER) {
+		if (resolver == BiomeColors.WATER_COLOR_RESOLVER || resolver == BiomeTints.water()) {
 			return BlockLooks.TINT_WATER;
 		}
 		return BlockLooks.TINT_NONE;
