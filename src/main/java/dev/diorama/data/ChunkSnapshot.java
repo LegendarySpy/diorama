@@ -1,5 +1,6 @@
 package dev.diorama.data;
 
+import dev.diorama.bake.TallChunks;
 import dev.diorama.mixin.BiomeManagerAccessor;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -131,8 +132,7 @@ public final class ChunkSnapshot {
 			}
 		}
 		this.maxY = top <= chunk.getMinY() ? Integer.MIN_VALUE : top;
-		// Water and shallow overhangs can hide blocks below the motion-blocking height.
-		this.floorY = floor == Integer.MAX_VALUE ? chunk.getMinY() : floor - 24;
+		this.floorY = floorY(floor, chunk.getMinY());
 		this.copycats = Copycats.INSTALLED ? copycats(chunk, sections.length) : null;
 	}
 
@@ -235,13 +235,24 @@ public final class ChunkSnapshot {
 			this.surface[i] = chunk.surface()[i];
 		}
 		this.maxY = top <= level.getMinY() ? Integer.MIN_VALUE : top;
-		this.floorY = floor - 24;
+		this.floorY = floorY(floor, level.getMinY());
 		this.copycats = null;
 	}
 
 	/** A chunk read from the world's save; see the constructor. */
 	public static ChunkSnapshot fromSave(SavedChunk chunk, @Nullable SavedChunk[] around, Level level) {
 		return new ChunkSnapshot(chunk, around, level);
+	}
+
+	/** {@link #floorY} from the lowest motion-blocking height in the chunk. */
+	private static int floorY(int solid, int minY) {
+		// A build over the whole chunk, higher than any ground, hides nothing: the map tilts, so what's
+		// under it shows from far to the south.
+		if (solid == Integer.MAX_VALUE || solid > TallChunks.ORDINARY_TOP) {
+			return minY;
+		}
+		// Water and shallow overhangs can hide blocks below the motion-blocking height.
+		return solid - 24;
 	}
 
 	/** What the chunk's copycats are filled with, by section, or null if none are filled. */
@@ -369,6 +380,43 @@ public final class ChunkSnapshot {
 	/** Whether the game had the neighbouring chunk at this offset when the snapshot was taken. */
 	public boolean hasBiomesAround(int dx, int dz) {
 		return this.biomes[(dx + 1) * 3 + dz + 1] != null;
+	}
+
+	/**
+	 * One above the tallest block below {@code ceiling}, as far as the columns' tops tell, or
+	 * {@code Integer.MIN_VALUE} if none is.
+	 */
+	public int topBelow(int ceiling) {
+		if (this.maxY < ceiling) {
+			return this.maxY == Integer.MIN_VALUE ? Integer.MIN_VALUE : this.maxY + 1;
+		}
+		int top = Integer.MIN_VALUE;
+		for (int y : this.surface) {
+			if (y < ceiling) {
+				top = Math.max(top, y + 1);
+			}
+		}
+		return top;
+	}
+
+	/** The bottom y of the lowest section with blocks in it, from the one holding {@code y} up; {@code y} if none has. */
+	public int firstSectionFrom(int y) {
+		for (int i = Math.max(0, (y >> 4) - this.minSectionY); i < this.states.length; i++) {
+			if (this.states[i] != null || this.uniform[i] != null) {
+				return (this.minSectionY + i) << 4;
+			}
+		}
+		return y;
+	}
+
+	/** One above the highest section with blocks in it below the one holding {@code y}; {@code Integer.MIN_VALUE} if none has. */
+	public int lastSectionTopBelow(int y) {
+		for (int i = Math.min(this.states.length, (y >> 4) - this.minSectionY) - 1; i >= 0; i--) {
+			if (this.states[i] != null || this.uniform[i] != null) {
+				return (this.minSectionY + i + 1) << 4;
+			}
+		}
+		return Integer.MIN_VALUE;
 	}
 
 	/** The column's top block y, where its tints are sampled. */
