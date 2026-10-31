@@ -86,6 +86,7 @@ public class DioramaClientTest implements FabricClientGameTest {
 		}
 		TestWorldSave save = null;
 		int[] spawnCell = null;
+		int savedChunksGround = 0;
 		try (TestSingleplayerContext world = context.worldBuilder()
 			.setUseConsistentSettings(false)
 			.adjustSettings(s -> {
@@ -192,6 +193,9 @@ public class DioramaClientTest implements FabricClientGameTest {
 			if (tests.contains("image-export")) {
 				ImageExportTest.run(context, world);
 			}
+			if (tests.contains("saved-chunks")) {
+				savedChunksGround = SavedChunksTest.run(context, world);
+			}
 			if (tests.contains("waystones")) {
 				waystones(context, world);
 			}
@@ -213,8 +217,11 @@ public class DioramaClientTest implements FabricClientGameTest {
 				context.waitTicks(100);
 			}
 		}
-		if ((spawnCell != null || tests.contains("waypoints") || tests.contains("waystones")) && save != null) {
+		if ((spawnCell != null || tests.contains("waypoints") || tests.contains("waystones") || tests.contains("saved-chunks")) && save != null) {
 			try (TestSingleplayerContext reopened = save.open()) {
+				if (tests.contains("saved-chunks")) {
+					SavedChunksTest.reopened(context, savedChunksGround);
+				}
 				if (tests.contains("waypoints")) {
 					temporaryGone(context);
 				}
@@ -5504,10 +5511,10 @@ public class DioramaClientTest implements FabricClientGameTest {
 		}
 		if (env == null || env.isBlank()) {
 			//? if >=1.21.4 && fabric {
-			return Set.of("tour", "radar", "xaero-icons", "model-faces", "waypoints", "icons", "xaero-import", "unnumbered-states", "failing-model", "fog-of-war", "settings", "overlays", "screens", "enlarge", "minimap-frames", "game-time", "map-mouse-keys", "image-export", "dimensions", "saved-map", "recreated-world", "sub-maps", "multiplayer", "game-time-server", "server-id", "tracked-players", "realms");
+			return Set.of("tour", "radar", "xaero-icons", "model-faces", "waypoints", "icons", "xaero-import", "unnumbered-states", "failing-model", "fog-of-war", "settings", "overlays", "screens", "enlarge", "minimap-frames", "game-time", "map-mouse-keys", "image-export", "saved-chunks", "dimensions", "saved-map", "recreated-world", "sub-maps", "multiplayer", "game-time-server", "server-id", "tracked-players", "realms");
 			//?} else {
 			/*// On NeoForge and before 1.21.4 the tests run on src/gameshim, which can't start a dedicated server.
-			return Set.of("tour", "radar", "xaero-icons", "model-faces", "waypoints", "icons", "xaero-import", "unnumbered-states", "failing-model", "fog-of-war", "settings", "overlays", "screens", "enlarge", "minimap-frames", "game-time", "map-mouse-keys", "image-export", "dimensions", "saved-map", "recreated-world", "sub-maps");
+			return Set.of("tour", "radar", "xaero-icons", "model-faces", "waypoints", "icons", "xaero-import", "unnumbered-states", "failing-model", "fog-of-war", "settings", "overlays", "screens", "enlarge", "minimap-frames", "game-time", "map-mouse-keys", "image-export", "saved-chunks", "dimensions", "saved-map", "recreated-world", "sub-maps");
 			*///?}
 		}
 		return Set.of(env.split(","));

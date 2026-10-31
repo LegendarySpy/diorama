@@ -5,6 +5,7 @@
 	"client": [
 		"BiomeManagerAccessor",
 		"ChatComponentMixin",
+		"ChunkMapInvoker",
 		"ClientChunkCacheMixin",
 		"ClientPacketListenerMixin",
 		"CustomPayloadMixin",

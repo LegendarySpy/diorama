@@ -6,6 +6,7 @@ import dev.diorama.bake.TileKey;
 import dev.diorama.data.ChunkSnapshot;
 import dev.diorama.data.Copycats;
 import dev.diorama.render.MapLevel;
+import dev.diorama.render.SavedChunkImport;
 import java.nio.file.Path;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
@@ -45,6 +46,13 @@ public final class MapSession {
 
 	private final ClientLevel level;
 	private final MapLevel map;
+	/**
+	 * Whether this is the dimension's main map. A map the player made starts blank and stays theirs
+	 * to fill, so only the main one fills in from the save.
+	 */
+	private final boolean mainMap;
+	/** Fills the main map in from the world's save, in singleplayer; null elsewhere and when turned off. */
+	private @Nullable SavedChunkImport savedChunks;
 	private final Map<Long, Pending> pending = new LinkedHashMap<>();
 	private boolean underground;
 	private MapStyle style = MapStyle.get();
@@ -54,6 +62,15 @@ public final class MapSession {
 		// The Nether's roof: its sky view looks down from just under it.
 		int roof = level.dimensionType().hasCeiling() ? level.getMinY() + level.dimensionType().logicalHeight() : MapLevel.NO_ROOF;
 		this.map = new MapLevel(level.getMinY(), level.getMaxY() + 1, roof, mapFolder(level, key));
+		this.mainMap = key != null && Maps.of(key).active(level.dimension().identifier().toString()).isEmpty();
+	}
+
+	/** Stops filling in from the save, then saves and closes the map. */
+	private void end() {
+		if (this.savedChunks != null) {
+			this.savedChunks.stop();
+		}
+		this.map.close();
 	}
 
 	/** The folder of the dimension's map in use ({@link Maps}), or null outside a world. */
@@ -73,7 +90,7 @@ public final class MapSession {
 	 */
 	public static void mapChanged(String dimension) {
 		if (current != null && current.level.dimension().identifier().toString().equals(dimension)) {
-			current.map.close();
+			current.end();
 			current = null;
 		}
 	}
@@ -102,7 +119,7 @@ public final class MapSession {
 	/** Saves and ends the session. For closing the game; leaving a world is noticed by {@link #tick}. */
 	public static void close() {
 		if (current != null) {
-			current.map.close();
+			current.end();
 			current = null;
 		}
 	}
@@ -140,7 +157,7 @@ public final class MapSession {
 	 */
 	private static @Nullable MapSession forLevel(@Nullable ClientLevel level) {
 		if (current != null && current.level != level) {
-			current.map.close();
+			current.end();
 			current = null;
 		}
 		if (level != null && current == null) {
@@ -371,7 +388,24 @@ public final class MapSession {
 		return Minecraft.getInstance();
 	}
 
+	/** Starts or stops filling in from the save with the setting. */
+	private void updateSavedChunks(Minecraft mc) {
+		boolean on = Settings.get().mapSavedChunks && this.mainMap && mc.getSingleplayerServer() != null;
+		if (on && this.savedChunks == null) {
+			this.savedChunks = SavedChunkImport.start(this.map, this.level);
+		} else if (!on && this.savedChunks != null) {
+			this.savedChunks.stop();
+			this.savedChunks = null;
+		}
+	}
+
+	/** What's filling the map in from the save, or null if nothing is. */
+	public @Nullable SavedChunkImport savedChunks() {
+		return this.savedChunks;
+	}
+
 	private void tickSession(Minecraft mc) {
+		this.updateSavedChunks(mc);
 		LocalPlayer player = mc.player;
 		if (player != null && this.ticks++ % 40 == 0) {
 			this.sweepLoadedChunks(player);

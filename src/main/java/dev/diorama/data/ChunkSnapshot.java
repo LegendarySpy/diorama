@@ -8,6 +8,7 @@ import net.minecraft.core.Holder;
 import net.minecraft.core.SectionPos;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.util.Mth;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.level.LightLayer;
 import net.minecraft.world.level.biome.Biome;
 import net.minecraft.world.level.biome.Biomes;
@@ -186,6 +187,61 @@ public final class ChunkSnapshot {
 	 */
 	public static ChunkSnapshot fromServer(ChunkAccess chunk, ClientLevel level) {
 		return new ChunkSnapshot(chunk, level, chunk.getPersistedStatus().isOrAfter(ChunkStatus.FULL));
+	}
+
+	/**
+	 * A chunk read from the world's save, for places the client never loaded. {@code around} is it
+	 * and its eight neighbours as read, indexed like {@link #biomes}, null where the save has none:
+	 * only their biomes are used. Copycats keep their material in block entity data, which isn't
+	 * read, so they show as the empty block.
+	 */
+	@SuppressWarnings("unchecked")
+	private ChunkSnapshot(SavedChunk chunk, @Nullable SavedChunk[] around, Level level) {
+		this.chunkX = chunk.chunkX();
+		this.chunkZ = chunk.chunkZ();
+		this.minSectionY = level.getMinSectionY();
+		int count = chunk.states().length;
+		this.states = new PalettedContainer[count];
+		this.uniform = new BlockState[count];
+		for (int i = 0; i < count; i++) {
+			PalettedContainer<BlockState> states = chunk.states()[i];
+			if (states != null) {
+				// Read from the save for this snapshot alone: nothing else holds or changes it.
+				BlockState single = Sections.singleValue(states);
+				if (single == null) {
+					this.states[i] = states;
+				} else if (!single.isAir()) {
+					this.uniform[i] = single;
+				}
+			}
+		}
+		this.biomes = new PalettedContainerRO[9][];
+		for (int i = 0; i < 9; i++) {
+			if (around[i] != null) {
+				this.biomes[i] = around[i].biomes();
+			}
+		}
+		this.biomeZoomSeed = ((BiomeManagerAccessor) level.getBiomeManager()).diorama$biomeZoomSeed();
+		this.blendRadius = Minecraft.getInstance().options.biomeBlendRadius().get();
+		this.fallbackBiome = level.registryAccess().lookupOrThrow(Registries.BIOME).getOrThrow(Biomes.PLAINS);
+		this.hasSkyLight = level.dimensionType().hasSkyLight();
+		this.blockLight = chunk.blockLight();
+		this.skyLight = chunk.skyLight();
+		int top = Integer.MIN_VALUE;
+		int floor = Integer.MAX_VALUE;
+		for (int i = 0; i < 256; i++) {
+			top = Math.max(top, chunk.surface()[i]);
+			floor = Math.min(floor, chunk.solid()[i]);
+			this.surface[i] = chunk.surface()[i];
+		}
+		this.maxY = top <= level.getMinY() ? Integer.MIN_VALUE : top;
+		this.floorY = floor - 24;
+		this.copycats = null;
+	}
+
+	/** A chunk read from the world's save; see the constructor. */
+	public static ChunkSnapshot fromSave(SavedChunk chunk, @Nullable SavedChunk[] around, Level level) {
+		return new ChunkSnapshot(chunk, around, level);
 	}
 
 	/** What the chunk's copycats are filled with, by section, or null if none are filled. */
