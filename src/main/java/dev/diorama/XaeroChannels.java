@@ -5,11 +5,12 @@ import io.netty.buffer.Unpooled;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 //? if >=1.21 {
-import java.util.Collections;
+import java.util.ArrayDeque;
 //?}
 import java.util.List;
 //? if >=1.21 {
 import java.util.Map;
+import java.util.Queue;
 import java.util.WeakHashMap;
 //?}
 import net.minecraft.client.Minecraft;
@@ -424,13 +425,16 @@ public final class XaeroChannels {
 	 * as one from the server. From 1.21.9 the client also handles packets in a queue of their own,
 	 * ahead of its other tasks, so an ID handled as a task could come after a world change the
 	 * server sent after it, and name the wrong world. {@link #queuePeeked} puts it where its
-	 * payload is.
+	 * payload is. A queue each, as another mod's codec may return equal payloads for different
+	 * messages, or one payload for all it ignores.
 	 */
-	private static final Map<Object, Message> PEEKED = Collections.synchronizedMap(new WeakHashMap<>());
+	private static final Map<Object, Queue<Message>> PEEKED = new WeakHashMap<>();
 
 	/** {@code payload} carries {@code message}. Network thread, by a mixin. */
 	public static void peeked(Object payload, Message message) {
-		PEEKED.put(payload, message);
+		synchronized (PEEKED) {
+			PEEKED.computeIfAbsent(payload, key -> new ArrayDeque<>()).add(message);
+		}
 	}
 
 	/**
@@ -438,10 +442,18 @@ public final class XaeroChannels {
 	 * the client thread, or on the client thread for a payload in a bundle. By a mixin.
 	 */
 	public static void queuePeeked(CustomPacketPayload payload, ClientCommonPacketListener listener) {
-		Message message = PEEKED.remove(payload);
-		if (message != null) {
-			queue(message, listener);
+		Message message;
+		synchronized (PEEKED) {
+			Queue<Message> messages = PEEKED.get(payload);
+			if (messages == null) {
+				return;
+			}
+			message = messages.remove();
+			if (messages.isEmpty()) {
+				PEEKED.remove(payload);
+			}
 		}
+		queue(message, listener);
 	}
 	//?}
 
