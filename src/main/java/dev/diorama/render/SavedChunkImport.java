@@ -140,7 +140,7 @@ public final class SavedChunkImport {
 		return this.drawn.containsKey(key);
 	}
 
-	/** For tests: whether a chunk has been drawn from the save, and not only seen live. */
+	/** For tests: whether a chunk has been handled from the save, not only seen live. */
 	public boolean drewChunk(int chunkX, int chunkZ) {
 		Progress progress = this.progress;
 		return progress != null && progress.time(chunkX >> 5, chunkZ >> 5, index(chunkX, chunkZ)) > 0;
