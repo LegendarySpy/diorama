@@ -119,7 +119,7 @@ public final class Waypoints {
 		//? if >=26.3 {
 		// A straw bed is for a night away: the respawn point stays where it was, and so does the pin.
 		var level = Minecraft.getInstance().level;
-		if (level.getBlockState(pos).getBlock() instanceof net.minecraft.world.level.block.AbstractBedBlock bed && !bed.getBedRule(level, pos).canSetSpawn(level)) {
+		if (level.getBlockState(pos).getBlock() instanceof net.minecraft.world.level.block.AbstractBedBlock bed && bed.getBedRule(level, pos).canSetSpawn() == net.minecraft.world.attribute.BedRule.Rule.NEVER) {
 			return true;
 		}
 		//?}
